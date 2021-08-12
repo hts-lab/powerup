@@ -45,7 +45,7 @@ make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
     # Find or Load Markers
     scrna_markers <- glue::glue("{scrna_folder}/{scrna_name}.{scrna_group_cells_by}.markers")
     Idents(scrna_data) <- scrna_group_cells_by
-    if (!file.exists(scrna_markers) | scrna_force_find_markers){
+    if (!file.exists(scrna_markers) | force_find_markers){
 
         show_msg("Finding markers for {scrna_name} ..")
         group_markers <- FindAllMarkers(scrna_data, 
