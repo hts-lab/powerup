@@ -49,4 +49,20 @@ gg_color_hue <- function(n) {
   
 
 
+#' Convert arxspan ID to cell line name
+#'
+#' This function converts an arxpan ID to a cell line name.
+#' @param arxspan The arxspan ID (aka DepMap_ID).
+#' @param sample_info The dataset containing the cell line name. Rownames must be arxspan IDs, and cell line name must be in column 'CCLE_Name'.
+#' @keywords arxspan
+#' @export
+#' @examples
+#' get_cell_line_name("ACH-000001",sample.info)    
+get_cell_line_name <- function(arxspan, sample_info){
+    
+    return(sample_info[arxspan,"CCLE_Name"])
+    
+}
+
+
 
