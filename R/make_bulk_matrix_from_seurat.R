@@ -24,7 +24,7 @@
 #' @export
 #' @examples
 #' show_msg("The number of cells is {cell_count}")
-make_expression_matrix_from_seurat <- function(scrna_folder,
+make_bulk_matrix_from_seurat <- function(scrna_folder,
                                                scrna_name,
                                                scrna_group_cells_by = "seurat_clusters",
                                                scrna_assay_markers = "SCT",
