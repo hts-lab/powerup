@@ -48,6 +48,6 @@ make_bulk_matrix_from_seurat(
 This function creates a gene expression matrix from a list of files, each containing bulk gene expression profiles. It returns a samples-by-genes matrix.
 }
 \examples{
-show_msg("The number of cells is {cell_count}")
+make_bulk_matrix_from_seurat("./data","my_seurat_object")
 }
 \keyword{pseudobulk}

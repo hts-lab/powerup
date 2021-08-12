@@ -23,9 +23,8 @@
 #' @import Seurat
 #' @export
 #' @examples
-#' show_msg("The number of cells is {cell_count}")
-make_bulk_matrix_from_seurat <- function(scrna_folder,
-                                               scrna_name,
+#' make_bulk_matrix_from_seurat("./data","my_seurat_object")
+make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
                                                scrna_group_cells_by = "seurat_clusters",
                                                scrna_assay_markers = "SCT",
                                                scrna_assay_vars = "SCT",
@@ -40,7 +39,7 @@ make_bulk_matrix_from_seurat <- function(scrna_folder,
 
 
     # Load Seurat object
-    show_msg("Loading {eval(scrna_name)} ..")
+    show_msg("Loading {scrna_name} ..")
     scrna_data <- readRDS(glue::glue("{scrna_folder}/{scrna_name}.rds"))
 
     # Find or Load Markers
@@ -48,7 +47,7 @@ make_bulk_matrix_from_seurat <- function(scrna_folder,
     Idents(scrna_data) <- scrna_group_cells_by
     if (!file.exists(scrna_markers) | scrna_force_find_markers){
 
-        show_msg("Finding markers for {eval(scrna_name)} ..")
+        show_msg("Finding markers for {scrna_name} ..")
         group_markers <- FindAllMarkers(scrna_data, 
                                           assay = scrna_assay_markers, 
                                           test.use = scrna_test_markers, 
@@ -61,14 +60,14 @@ make_bulk_matrix_from_seurat <- function(scrna_folder,
 
     } else {
 
-        show_msg("Loading markers for {eval(scrna_name)} ..")
+        show_msg("Loading markers for {scrna_name} ..")
         group_markers <- read_tsv(scrna_markers, show_col_types = F)
 
     }
 
     # Keep only significant markers
     sig_markers <- group_markers %>% filter(p_val_adj < qvalue_cutoff) %>% pull(gene) %>% unique()
-    show_msg("Found {length(sig_markers)} differentially expressed genes at FDR < {eval(qvalue_cutoff)} ..")
+    show_msg("Found {length(sig_markers)} differentially expressed genes at FDR < {qvalue_cutoff} ..")
 
     # Also include the most variable genes overall (if they're not included in the above list already)
     var_vars <- VariableFeatures(scrna_data, assay = scrna_assay_vars)
@@ -78,7 +77,7 @@ make_bulk_matrix_from_seurat <- function(scrna_folder,
     show_msg("We will use a total of {length(expressed_genes_of_interest)} expression features ..")
 
 
-    show_msg("Generating pseudobulk profiles for {eval(scrna_name)} ..")
+    show_msg("Generating pseudobulk profiles for {scrna_name} ..")
     get_collapsed_counts <- function(study, label_slot, label_prefix, features=NULL, expression_slot = "RNA"){
 
         group_name = study[[label_slot]][1,1] %>% as.character()

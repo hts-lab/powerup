@@ -9,7 +9,7 @@
 #' show_msg("The number of cells is {cell_count}")
 show_msg <- function(x){
     
-    cat(glue::glue(x),sep = "\n")
+    cat(glue::glue(x, .envir = parent.frame()),sep = "\n")
     flush.console()
     
 }
