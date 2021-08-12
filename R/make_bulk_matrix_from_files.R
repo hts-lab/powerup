@@ -13,7 +13,7 @@
 #' @export
 #' @examples
 #' show_msg("The number of cells is {cell_count}")
-make_new_bulk_matrix <- function(bulk_files, pseudocount = 1){
+make_bulk_matrix_from_files <- function(bulk_files, pseudocount = 1){
     
   load_bulk_data <- function(file, prior_count = 1){
 
