@@ -20,7 +20,7 @@ prep_features_lineage <- function(ccle_data, our_data = NULL, lineage_column_nam
     dplyr::mutate(lineage = if_else(lineage == "", "unknown", lineage)) %>%
     rownames_to_column("sample") 
   
-  if(!is.null(our_data)) lineage_info <- lineage_info %>% rownames_to_column("sample") %>% dplyr::bind_rows(our_data)
+  if(!is.null(our_data)) lineage_info <- lineage_info %>% dplyr::bind_rows(our_data %>% rownames_to_column("sample"))
   
   lineage_info <- lineage_info %>%
     dplyr::mutate(value = 1L) %>% 
