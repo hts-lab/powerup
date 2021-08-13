@@ -24,7 +24,7 @@ prep_features_lineage <- function(ccle_data, our_data = NULL, lineage_column_nam
   
   lineage_info <- lineage_info %>%
     dplyr::mutate(value = 1L) %>% 
-    dplyr::pivot_wider("sample", names_from = "lineage", values_from = "value", values_fill = 0L) %>%
+    tidyr::pivot_wider("sample", names_from = "lineage", values_from = "value", values_fill = 0L) %>%
     dplyr::rename_with(.cols = -"sample", .fn = ~ paste0("Lin_", .x)) 
   
   
