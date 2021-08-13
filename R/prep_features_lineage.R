@@ -11,16 +11,15 @@
 prep_features_lineage <- function(ccle_data, our_data = NULL, lineage_column_name = "lineage"){
   
   lineage_info <- ccle_data %>%
-    dplyr::select(all_of(lineage_column_name)) %>%
-    distinct()
+    dplyr::select(all_of(lineage_column_name))
   
   colnames(lineage_info) <- "lineage"
   
   lineage_info <- lineage_info %>%
     dplyr::mutate(lineage = if_else(lineage == "", "unknown", lineage)) %>%
-    rownames_to_column("sample") 
+    rownames_to_column("sample") %>% dplyr::distinct()
   
-  if(!is.null(our_data)) lineage_info <- lineage_info %>% dplyr::bind_rows(our_data %>% rownames_to_column("sample"))
+  if(!is.null(our_data)) lineage_info <- lineage_info %>% dplyr::bind_rows(our_data %>% rownames_to_column("sample") %>% dplyr::distinct())
   
   lineage_info <- lineage_info %>%
     dplyr::mutate(value = 1L) %>% 
