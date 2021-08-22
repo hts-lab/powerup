@@ -15,7 +15,8 @@ make_xgb_models(
   nrepeats = 3,
   nrounds = 100,
   min_score = 0.5,
-  skip_eval = FALSE
+  skip_eval = FALSE,
+  use_gpu = TRUE
 )
 }
 \arguments{
@@ -40,6 +41,8 @@ make_xgb_models(
 \item{min_score}{The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values}
 
 \item{skip_eval}{Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.}
+
+\item{use_gpu}{Default = TRUE. Set to FALSE if using CPU.}
 }
 \description{
 This function creates an XGBoost model

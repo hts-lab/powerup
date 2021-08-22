@@ -12,8 +12,9 @@
 #' @param nrounds The maximum number of trees in the XGBoost model.
 #' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
+#' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
-#' @import xgboost
+#' @import xgboost purrr fastshap
 #' @export
 #' @examples
 #' make_xgb_models("ko_ctnnb1",1,1,my_data)
@@ -24,7 +25,8 @@ make_xgb_models <- function(perturbation, indx, total, dataset,
                             nrepeats = 3, 
                             nrounds = 100, 
                             min_score = 0.5, 
-                            skip_eval = FALSE){
+                            skip_eval = FALSE,
+                            use_gpu = TRUE){
   
   cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
@@ -222,7 +224,7 @@ make_xgb_models <- function(perturbation, indx, total, dataset,
                   params = model_params,
                   nthread = 16,
                   max_bin = 64,
-                  tree_method = "gpu_hist",
+                  tree_method = if_else(use_gpu,"gpu_hist","auto"),
                   nrounds = nrounds,
                   early_stopping_rounds = 10, 
                   verbose = 0) %>%
@@ -270,7 +272,7 @@ make_xgb_models <- function(perturbation, indx, total, dataset,
                           params = last_params, 
                           nthread = 16,
                           max_bin = 64,
-                          tree_method = "gpu_hist",
+                          tree_method = if_else(use_gpu,"gpu_hist","auto"),
                           nrounds = last_nrounds, 
                           early_stopping_rounds = 10, verbose = 0)
     
