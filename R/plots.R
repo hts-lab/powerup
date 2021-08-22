@@ -29,6 +29,7 @@ helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e")
 #' @param color The color of the bars in the plot.
 #' @keywords plot
 #' @import ggplot2 cowplot purrr
+#' @export
 #' @examples
 #' plot_top_contributors(shap_table, name, 10)
 plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "training", n_predictors = 10, n_columns = 5, color = "#52565e"){
