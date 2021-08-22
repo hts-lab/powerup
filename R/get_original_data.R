@@ -4,7 +4,7 @@
 #' @param model A model object generated with make_xgb_models
 #' @param data The dataset that was passed to make_xgb_models
 #' @keywords data
-#' @import
+#' @import glue 
 #' @export
 #' @examples
 #' get_original_data(my_models[1],my_data)
