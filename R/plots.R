@@ -35,7 +35,11 @@ helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e")
 plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "training", n_predictors = 10, n_columns = 5, color = "#52565e"){
   
   # Restrict the plot to the top 10 most variable predictions across our clusters
-  models_of_interest <- if_else(!is.null(models_to_use) && length(models_to_use) > 0, models[models_to_use], models)
+  models_of_interest <- models
+  if(!is.null(models_to_use) && length(models_to_use) > 0){
+    models_of_interest <- models[models_to_use]
+  }
+  
   
   if (data_to_use == "training"){
     shap_tables <- map(models_of_interest, "feature_contribution")
