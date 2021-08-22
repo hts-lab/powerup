@@ -85,6 +85,8 @@ summarize_error <- function(models){
     reduce(left_join, by = "sample") %>%
     column_to_rownames("sample")
   
+  colnames(error_table) <- names(models)
+  
   return(error_table)
   
 }
