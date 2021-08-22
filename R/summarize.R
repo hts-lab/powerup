@@ -91,5 +91,27 @@ summarize_error <- function(models){
   
 }
 
-
-
+#' Find most variable predictions
+#'
+#' This function generates a vector of perturbation names with the most variable predictions, given a predictions table.
+#' @param predictions_table A predictions table generated with summarize_predictions
+#' @param n Number of variable predictions returned (default = 50).
+#' @keywords scores
+#' @import glue
+#' @export
+#' @examples
+#' summarize_models(my_models)
+get_variable_predictions <- function(predictions_table, n = 50){
+  
+  var_preds <- predictions_table %>% 
+    rownames_to_column("sample") %>% 
+    pivot_longer(starts_with("ko_"), names_to = "brd", values_to = "prediction") %>%
+    group_by(brd) %>% 
+    summarize(var = var(prediction)) %>%
+    arrange(desc(var)) %>% 
+    top_n(n, wt=var) %>% 
+    pull(brd)
+  
+  return(var_preds)
+  
+}
