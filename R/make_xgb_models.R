@@ -16,7 +16,7 @@
 #' @import xgboost
 #' @export
 #' @examples
-#' show_msg("The number of cells is {cell_count}")
+#' make_xgb_models("ko_ctnnb1",1,1,my_data)
 make_xgb_models <- function(perturbation, indx, total, dataset, 
                             response_cutoff = 0.75,
                             weight_cap = 0.05,

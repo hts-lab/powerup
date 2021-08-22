@@ -45,6 +45,6 @@ make_xgb_models(
 This function creates an XGBoost model
 }
 \examples{
-show_msg("The number of cells is {cell_count}")
+make_xgb_models("ko_ctnnb1",1,1,my_data)
 }
 \keyword{model}
