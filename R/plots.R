@@ -372,7 +372,7 @@ plot_shap_scatter <- function(model, name, model_data,
                               n_columns = 2,
                               overlay_predictions = FALSE,
                               sample_names = NULL, 
-                              sample_colors = NULL){     
+                              sample_colors = NULL, sample_info = NULL){     
   p <- list()
   
   if(!overlay_predictions){
