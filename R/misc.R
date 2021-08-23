@@ -100,3 +100,36 @@ get_double_digit_number <- function(x){
 Get_Double_Digit_Number <- Vectorize(get_double_digit_number)
 
 
+
+
+#' Get demo samples
+#'
+#' This is a helper function to automatically pick cell lines with opposite predictions
+#' @export
+get_demo_samples <- function(model, samples = NULL, lineage = NULL, model_data = NULL){
+  
+  selection <- model$predictions
+  acceptable_names <- names(model$predictions)
+  
+  if(!is.null(lineage) && !is.null(model_data)){
+    data <- get_original_data(model, model_data) %>% filter(get(paste0("Lin_",lineage)) == 1)
+    acceptable_names <- rownames(data)
+  }
+  
+  if(!is.null(samples) && length(samples) > 0){
+    return(intersect(samples, acceptable_names))
+  }
+  
+  selection <- selection[acceptable_names]
+  if(is.null(samples) || length(samples) == 0){
+    sample_top <- selection[which(selection == max(selection))] %>% names()
+    
+    sample_bottom <- selection[which(selection == min(selection))] %>% names() 
+    return(c(sample_top,sample_bottom))
+  } else {
+    return(intersect(samples, acceptable_names))
+  }
+  
+}
+
+

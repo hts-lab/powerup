@@ -65,7 +65,7 @@ plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "t
 #' @import Seurat ggplot2 cowplot
 #' @export
 #' @examples
-#' plot_top_contributors(shap_table, name, 10)
+#' plot_predictions_dimplot(my_seurat_obj, "ko_ctnnb1")
 plot_predictions_dimplot <- function(scRNA_data, perturbation, 
                                      reduction = "umap",
                                      dims = c(1,2),
@@ -93,5 +93,156 @@ plot_predictions_dimplot <- function(scRNA_data, perturbation,
     labs(color = perturbation, x = colnames(embed_data)[dims[1]], y = colnames(embed_data)[dims[2]])
   
   return(p)
+  
+}
+
+
+
+#' Plot feature contributions to sample predictions
+#'
+#' This function plots the contribution (Shapley values) of the top features to a sample's predictions.
+#' @param model A model generated with make_xgb_models and has appended predictions with add_predictions.
+#' @param model_data The training dataset used to generate the model.
+#' @param name The name of the perturbation whose prediction we want to plot.
+#' @param sample_names The names of the samples we want to generate a plot for.
+#' @param n_features The number of top contributors to show their individual contribution. All other predictors will have their contribution combined.
+#' @param n_columns Number of columns to plot in a grid when plotting more than one sample.
+#' @param short_title If using many columns, set to TRUE to shorten the title of the plot.
+#' @param fixed_axis If TRUE, the plot will be set to a fixed scale (-0.05 to 1). Default = FALSE.
+#' @param replace_names If TRUE, the sample name will be replaced using get_cell_line_name. Must supply sample_info.
+#' @param sample_info If replace_names is TRUE, this must be supplied.
+#' @param show_error If TRUE, a shaded area will be used to visualize prediction interval. Default = TRUE.
+#' @param highlight_significant If TRUE, a border will be shown to indicate the prediction interval is above 0.5. Default = FALSE.
+#' @param plot_new_data Set to TRUE if plotting the contribution to a new sample (not used in training).
+#' @keywords plot shapley contribution
+#' @import Seurat ggplot2 cowplot data.table
+#' @export
+#' @examples
+#' plot_contribution_to_sample(my_models, model_dataset, "ko_ctnnb1", "my_sample")
+plot_contribution_to_sample <- function(model, model_data, name, sample_names, 
+                                        n_features = 5, 
+                                        n_columns = 1,
+                                        short_title = FALSE,
+                                        fixed_axis = FALSE, 
+                                        replace_names = FALSE,  sample_info = NULL,
+                                        show_error = TRUE, 
+                                        highlight_significant = FALSE,
+                                        plot_new_data = FALSE){
+  
+  # This will hold the final list of plots
+  p_list <- list()
+  
+  # The null prediction is just the average of all predictions in the training data
+  
+  null_prediction = model$null_prediction #  mean(model$predictions)
+  
+  feature_data <- get_original_data(model,model_data)
+  
+  for (sample_name in sample_names){
+    
+    
+    # We store the final prediction value
+    if(!plot_new_data) final_prediction = model$predictions[sample_name] else final_prediction = model$new_data$predictions[sample_name]
+    
+    # Estimate error
+    if(!plot_new_data) prediction_error <- model$predictions_error[sample_name] else prediction_error <- model$new_data$predictions_error[sample_name]
+    error_upper <- final_prediction + 1.96*prediction_error
+    error_lower <- final_prediction - 1.96*prediction_error
+    
+    
+    # Create a long table of terms and their shapley values (called shap_value)
+    if(!plot_new_data) term_values <- model$shap_values[sample_name,] else term_values <- model$new_data$shap_values[sample_name,] 
+    
+    term_values <- term_values %>% data.table::transpose(keep.names = "term") %>% 
+      rename("shap_value" = "V1") %>% arrange(desc(abs(shap_value))) %>% filter(abs(shap_value) > 0)
+    
+    
+    
+    # Add the expression level of each term (called feature_value)
+    if(!plot_new_data){
+      # feature_values <- model$data[sample_name,] 
+      feature_values <- feature_data[sample_name,]
+    } else {
+      feature_values <- model$new_data$data[sample_name,]
+    }
+    
+    
+    feature_values <- feature_values %>% t %>% as_tibble(rownames = "term")
+    colnames(feature_values) <- c("term","feature_value")
+    feature_values <- feature_values %>% mutate(feature_value = round(feature_value, 2))
+    term_values <- term_values %>% left_join(feature_values, by = "term")
+    
+    
+    # Keep the top terms, and combine the contribution of all other terms (we also count how many terms we combined)
+    top_terms <- term_values %>% top_n(n_features, wt=abs(shap_value)) %>% pull(term)
+    other_count <- term_values %>% filter(!term %in% top_terms) %>% pull(shap_value) %>% length()
+    other_sum <- term_values %>% filter(!term %in% top_terms) %>% pull(shap_value) %>% sum()
+    if (other_count == 1) term_word = "term" else term_word = "terms"
+    other_row <- tibble(term = glue::glue("{other_count} other {term_word}"), shap_value = other_sum)
+    none_row <- tibble(term = glue::glue("starting_value"), shap_value = null_prediction)
+    
+    # We generate all the information we need to make the plot
+    term_values <- term_values %>% filter(term %in% top_terms) %>% bind_rows(other_row) %>% bind_rows(none_row) %>%
+      rowid_to_column("id") %>% arrange(desc(id)) %>% 
+      mutate(end = cumsum(shap_value)) %>% mutate(start = lag(end, default = 0)) %>%
+      filter(term != "starting_value") %>%
+      mutate(term = factor(term, levels=term)) %>% mutate(id = seq_along(term)) %>%
+      mutate(term_label = if_else(!is.na(feature_value),glue::glue("{str_to_upper(term)} = {feature_value}"),str_to_upper(term))) %>%
+      mutate(term_label = factor(term_label, levels=term_label)) %>%
+      mutate(term_direction = if_else(shap_value > 0, "positive", "negative"))
+    
+    
+    
+    clean_perturb_name = str_to_upper(word(name, 2, sep="_"))
+    
+    if(replace_names & !plot_new_data) sample_name <- get_cell_line_name(sample_name, sample_info)
+    
+    # Make the plot    
+    p <- ggplot(term_values, aes(x = term_label, fill = term_direction)) + 
+      geom_point(alpha=0, y=0)+
+      geom_hline(yintercept = first(term_values$start), linetype = "dashed", color = "lightgray")+
+      geom_hline(yintercept = last(term_values$end), linetype = "dashed", color = "black")
+    
+    
+    if (show_error){
+      p <- p +
+        geom_rect(xmin = -Inf, xmax = Inf, ymin = last(term_values$end) - 1.96*prediction_error, ymax = last(term_values$end) + 1.96*prediction_error, alpha = 0.025, fill="gray")+
+        geom_hline(yintercept = last(term_values$end) + 1.96*prediction_error, linetype = "dashed", color = "lightgray")+
+        geom_hline(yintercept = last(term_values$end) - 1.96*prediction_error, linetype = "dashed", color = "lightgray")
+      
+      
+    } 
+    
+    plot_title = glue::glue("{sample_name} ({scales::percent(final_prediction,accuracy = 1)} probability of {clean_perturb_name} dependency)")
+    
+    if(short_title)  plot_title = glue::glue("{sample_name} ({scales::percent(final_prediction,accuracy = 1)} {clean_perturb_name})")
+    
+    p <- p + geom_rect(aes(xmin = id - 0.45, xmax = id + 0.45, ymin = start, ymax = end))+
+      geom_segment(aes(x = id, xend = id, y = start, yend = end), lineend = "round", linejoin ="round", size = 0.7, arrow = arrow(angle = 30, length = unit(0.5, "cm")), color = "white")+
+      geom_text(aes(x = id,
+                    y = end, 
+                    color = if_else(shap_value > 0, "positive","negative"), 
+                    label = if_else(shap_value > 0, paste0("+",scales::percent(shap_value,accuracy=0.01)),scales::percent(shap_value,accuracy=0.01))), 
+                nudge_y = if_else(term_values$shap_value > 0, 0.04, -0.04),
+                size = 3, hjust = 0.5)+
+      scale_color_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
+      scale_fill_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
+      labs(subtitle = plot_title,
+           x = NULL, y = "Feature Contribution")+
+      theme_bw()+
+      theme(text=element_text(size=14), legend.position="none")
+    
+    if (!fixed_axis) p <- p+coord_flip(ylim = c(min(c(term_values$start, term_values$end))-0.05,0.05+max(c(term_values$start, term_values$end))))
+    else p <- p+coord_flip(ylim = c(-0.05,1))+scale_y_continuous(labels = scales::percent)
+    
+    if (highlight_significant && error_lower >= 0.5) p <- p +  theme(panel.border = element_rect(color = "red", fill = NA, size = 1))
+    
+    p_list[[sample_name]] <- p
+    
+  }
+  
+  p_final <- plot_grid(plotlist = p_list, ncol=n_columns, align='v')
+  
+  return(p_final)
   
 }

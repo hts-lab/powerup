@@ -27,7 +27,7 @@ plot_predictions_dimplot(
 This function generates a dimensional reduction plot with predictions overlayed on each cell.
 }
 \examples{
-plot_top_contributors(shap_table, name, 10)
+plot_predictions_dimplot(my_seurat_obj, "ko_ctnnb1")
 }
 \keyword{dimplot}
 \keyword{plot}
