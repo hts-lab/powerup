@@ -12,7 +12,8 @@ plot_shap_scatter_for_training_samples(
   lineage_to_use = NULL,
   sample_colors = NULL,
   n_features = 6,
-  n_columns = 3
+  n_columns = 3,
+  sample_info = NULL
 )
 }
 \arguments{

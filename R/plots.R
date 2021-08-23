@@ -372,7 +372,8 @@ plot_shap_scatter <- function(model, name, model_data,
                               n_columns = 2,
                               overlay_predictions = FALSE,
                               sample_names = NULL, 
-                              sample_colors = NULL){     
+                              sample_colors = NULL,
+                              sample_info = NULL){     
   p <- list()
   
   if(!overlay_predictions){
@@ -427,7 +428,13 @@ plot_shap_scatter <- function(model, name, model_data,
         geom_point(x=1,y=1)
       
       if(!overlay_predictions){
-        legend_p <- legend_p + scale_color_manual(values = sample_colors, labels = get_cell_line_name(selection_df$sample,sample.info))
+        if(!is.null(sample_info)){
+          legend_p <- legend_p + scale_color_manual(values = sample_colors, 
+                                                    labels = get_cell_line_name(selection_df$sample, sample_info = sample_info))
+        } else {
+          legend_p <- legend_p + scale_color_manual(values = sample_colors, 
+                                                    labels = selection_df$sample)
+        }
       }
       
       legend_p <- legend_p +
@@ -503,7 +510,7 @@ plot_shap_scatter <- function(model, name, model_data,
 #' plot_shap_scatter_for_training_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")
 plot_shap_scatter_for_training_samples <- function(models, models_to_use, model_data, 
                                           samples_to_use = NULL, lineage_to_use = NULL, sample_colors = NULL,
-                                          n_features = 6, n_columns = 3){
+                                          n_features = 6, n_columns = 3, sample_info = NULL){
   
   # Restrict the list of models to only those we wish to plot
   demo_models <- models[models_to_use]
@@ -521,7 +528,7 @@ plot_shap_scatter_for_training_samples <- function(models, models_to_use, model_
   pl <- pmap(inputs, plot_shap_scatter,
              model_data = model_data,
              n_features = n_features, n_columns = n_columns, 
-             sample_colors = sample_colors)
+             sample_colors = sample_colors, sample_info = sample_info)
   
   return(pl)
   
