@@ -160,7 +160,6 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     
     # Add the expression level of each term (called feature_value)
     if(!plot_new_data){
-      # feature_values <- model$data[sample_name,] 
       feature_values <- feature_data[sample_name,]
     } else {
       feature_values <- model$new_data$data[sample_name,]
@@ -248,7 +247,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 }
 
 
-#' Plot feature contributions to sample predictions
+#' Plot feature contributions to sample predictions from the training set.
 #'
 #' This function plots the contribution (Shapley values) of the top features to a sample's predictions.
 #' @param models A list of models generated with make_xgb_models and has appended predictions with add_predictions.
@@ -265,10 +264,11 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 #' @import Seurat ggplot2 cowplot data.table
 #' @export
 #' @examples
-#' plot_contribution_to_sample_demo(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, "soft_tissue")
-plot_contribution_to_sample_demo <- function(models, models_to_use, model_data, 
-                                             lineage_to_use = NULL,
+#' plot_contribution_to_training_sample(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, lineage_to_use = "soft_tissue")
+plot_contribution_to_training_sample <- function(models, models_to_use, model_data, 
+                                             samples_to_use = NULL, lineage_to_use = NULL, 
                                              n_features = 5, n_columns = 1, fixed_axis = TRUE, show_error = TRUE,
+                                             highlight_significant = FALSE,
                                              replace_names = FALSE, sample_info = NULL){
   
   
@@ -276,11 +276,7 @@ plot_contribution_to_sample_demo <- function(models, models_to_use, model_data,
   demo_models <- models[models_to_use]
   
   # Restrict the sample list to only those we wish to plot
-  if(!is.null(lineage_to_use)){
-    samples_to_plot <- map(demo_models, get_demo_samples, lineage = lineage_to_use, model_data = model_data)
-  } else {
-    samples_to_plot <- map(demo_models, get_demo_samples) 
-  }
+  samples_to_plot <- map(demo_models, get_demo_samples, samples = samples_to_use, lineage = lineage_to_use, model_data = model_data)
 
   # Generate a list of inputs
   inputs <- list()
@@ -292,7 +288,66 @@ plot_contribution_to_sample_demo <- function(models, models_to_use, model_data,
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
              n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
              replace_names = replace_names, sample_info = sample_info, 
+             highlight_significant = highlight_significant,
              show_error = show_error)
   
   return(pl)
 }
+
+
+
+
+
+#' Plot feature contributions to new sample predictions
+#'
+#' This function plots the contribution (Shapley values) of the top features to a sample's predictions, using new samples.
+#' @param models A list of models generated with make_xgb_models and has appended predictions with add_predictions.
+#' @param models_to_use A vector of model names to plot.
+#' @param model_data The training dataset used to generate the model.
+#' @param n_features The number of top contributors to show their individual contribution. All other predictors will have their contribution combined.
+#' @param n_columns Number of columns to plot in a grid when plotting more than one sample.
+#' @param short_title If using many columns, set to TRUE to shorten the title of the plot.
+#' @param fixed_axis If TRUE, the plot will be set to a fixed scale (-0.05 to 1). Default = FALSE.
+#' @param replace_names If TRUE, the sample name will be replaced using get_cell_line_name. Must supply sample_info.
+#' @param sample_info If replace_names is TRUE, this must be supplied.
+#' @param show_error If TRUE, a shaded area will be used to visualize prediction interval. Default = TRUE.
+#' @keywords plot shapley contribution
+#' @import Seurat ggplot2 cowplot data.table
+#' @export
+#' @examples
+#' plot_contribution_to_sample_demo(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, "soft_tissue")
+plot_contribution_to_new_samples <- function(models, models_to_use, model_data, 
+                                             new_samples_to_use = NULL,
+                                             n_features = 5, n_columns = 4, fixed_axis = TRUE, show_error = TRUE,
+                                             highlight_significant = TRUE, short_title = TRUE, sample_info = NULL){
+  
+  # Restrict the list of models to only those we wish to plot
+  demo_models <- models[models_to_use]
+  
+  # Restrict the sample list to only those we wish to plot
+  samples_to_plot <- map(my_models_with_predictions[example_perturbation], "new_data") %>% 
+    map("data") %>% 
+    map(rownames)
+  
+  if(!is.null(new_samples_to_use) && length(new_samples_to_use) > 0) samples_to_plot <- samples_to_plot %>% map(intersect, new_samples_to_use)
+  
+  # Generate a list of inputs
+  inputs <- list()
+  inputs$model <- demo_models
+  inputs$name <- names(demo_models)
+  inputs$sample_names <- samples_to_plot
+  
+  # Iterate through each input and add the plot to the list
+  pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
+             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
+             replace_names = FALSE, sample_info = sample_info, 
+             highlight_significant = highlight_significant, short_title = short_title,
+             show_error = show_error, plot_new_data = TRUE) 
+  
+  return(pl)
+  
+}
+
+
+  
+
