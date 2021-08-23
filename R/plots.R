@@ -276,8 +276,12 @@ plot_contribution_to_sample_demo <- function(models, models_to_use, model_data,
   demo_models <- models[models_to_use]
   
   # Restrict the sample list to only those we wish to plot
-  samples_to_plot <- map(demo_models, get_demo_samples, lineage = lineage_to_use)
-  
+  if(!is.null(lineage_to_use)){
+    samples_to_plot <- map(demo_models, get_demo_samples, lineage = lineage_to_use, model_data = model_data)
+  } else {
+    samples_to_plot <- map(demo_models, get_demo_samples) 
+  }
+
   # Generate a list of inputs
   inputs <- list()
   inputs$model <- demo_models
