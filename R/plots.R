@@ -265,7 +265,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 #' @export
 #' @examples
 #' plot_contribution_to_training_sample(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, lineage_to_use = "soft_tissue")
-plot_contribution_to_training_sample <- function(models, models_to_use, model_data, 
+plot_contribution_to_training_samples <- function(models, models_to_use, model_data, 
                                              samples_to_use = NULL, lineage_to_use = NULL, 
                                              n_features = 5, n_columns = 1, fixed_axis = TRUE, show_error = TRUE,
                                              highlight_significant = FALSE,
