@@ -10,15 +10,15 @@
 #' @param nfolds The number of folds in k-fold cross validation.
 #' @param nrepeats The number of repeats in k-fold cross validation.
 #' @param nrounds The maximum number of trees in the XGBoost model.
-#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values
+#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values).
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
 #' @import xgboost purrr fastshap
 #' @export
 #' @examples
-#' make_xgb_models("ko_ctnnb1",1,1,my_data)
-make_xgb_models <- function(perturbation, indx, total, dataset, 
+#' make_xgb_model("ko_ctnnb1",1,1,my_data)
+make_xgb_model <- function(perturbation, indx, total, dataset, 
                             response_cutoff = 0.75,
                             weight_cap = 0.05,
                             nfolds = 3, 
@@ -324,4 +324,45 @@ make_xgb_models <- function(perturbation, indx, total, dataset,
   
   
   return(output)
+}
+
+
+#' Make a list of predictive models of dependencies
+#'
+#' This function creates an XGBoost model for each perturbation given, and returns a list of model objects.
+#' @param perturbation Column name of the perturbation (e.g. "ko_ctnnb1").
+#' @param indx Integer index used, for progress report.
+#' @param total Integer of the total number of perturbations passed to this function, for progress report.
+#' @param dataset A dataframe with the perturbation in a column and all other predictors. Sample names are row names.
+#' @param response_cutoff The value above which the sample is considered sensitive.
+#' @param weight_cap The maximum weight of each minority case when resampling. Set to 0 if no resampling needed.
+#' @param nfolds The number of folds in k-fold cross validation.
+#' @param nrepeats The number of repeats in k-fold cross validation.
+#' @param nrounds The maximum number of trees in the XGBoost model.
+#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
+#' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
+#' @keywords model
+#' @import xgboost purrr fastshap
+#' @export
+#' @examples
+#' fit_depmap_models(my_data, c("ko_ctnnb1","ko_myod1"))
+fit_depmap_models <- function(depmap_data, models_to_make,
+                              response_cutoff = 0.5,
+                              weight_cap = 0,
+                              nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                              skip_eval = FALSE, use_gpu = TRUE){
+  
+  my_models <- map2(
+    models_to_make, seq_along(models_to_make), make_xgb_model,  
+    total = length(models_to_make),
+    dataset = depmap_data,
+    response_cutoff = response_cutoff, weight_cap = weight_cap,
+    nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+    skip_eval = skip_eval, use_gpu = use_gpu)
+  
+  names(my_models) <- models_to_make
+  
+  return(my_models)
+  
 }
