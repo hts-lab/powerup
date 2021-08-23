@@ -67,3 +67,36 @@ get_cell_line_name <- function(arxspan, sample_info){
 
 
 
+#' Changes the value column name of a dataframe
+#'
+#' This function converts an arxpan ID to a cell line name.
+#' @param df The dataframe.
+#' @param new_colname The new name.
+#' @keywords colname
+#' @export
+change_colname <- function(df, new_colname){
+  df %>% rename(!!new_colname := value)
+}
+
+
+#' Double-digit converter
+#'
+#' This function converts a single digit number to double digits.
+#' @export
+get_double_digit_number <- function(x){
+  
+  suppressWarnings(
+    if(!is.na(as.numeric(as.character(x))) && as.numeric(as.character(x)) < 10) return(paste0("0",x))
+  )
+  
+  return(as.character(x))
+  
+}
+
+#' Vectorized double-digit converter
+#'
+#' This function converts a single digit number to double digits.
+#' @export
+Get_Double_Digit_Number <- Vectorize(get_double_digit_number)
+
+

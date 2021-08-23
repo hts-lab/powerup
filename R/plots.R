@@ -40,7 +40,6 @@ plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "t
     models_of_interest <- models[models_to_use]
   }
   
-  
   if (data_to_use == "training"){
     shap_tables <- map(models_of_interest, "feature_contribution")
   } else {
@@ -53,3 +52,46 @@ plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "t
   
 }
 
+
+#' Overlay predictions on a dimensional reduction plot
+#'
+#' This function generates a dimensional reduction plot with predictions overlayed on each cell.
+#' @param scRNA_data A Seurat object with predictions appended (e.g. using append_predictions_to_seurat)
+#' @param perturbation The name of the perturbation whose predictions we want to plot.
+#' @param reduction The dimensionality reduction technique to show (default = 'umap')
+#' @param dims A 2-element vector with the dimensions to plot (default = c(1,2))
+#' @param fixed_color_scale Default = FALSE. If TRUE, the color scale will be fixed from 0 to 1.
+#' @keywords plot dimplot
+#' @import Seurat ggplot2 cowplot
+#' @export
+#' @examples
+#' plot_top_contributors(shap_table, name, 10)
+plot_predictions_dimplot <- function(scRNA_data, perturbation, 
+                                     reduction = "umap",
+                                     dims = c(1,2),
+                                     fixed_color_scale = FALSE){
+  
+  feature_data <- scRNA_data@meta.data[,perturbation]
+  embed_data <- scRNA_data[[reduction]]@cell.embeddings
+  dim_1 <- embed_data[,dims[1]]
+  dim_2 <- embed_data[,dims[2]]
+  
+  plot_data <- embed_data %>% cbind(feature_data)
+  
+  
+  p <- ggplot()+
+    geom_point(aes(x=dim_1,y=dim_2,color=feature_data))
+  
+  if(fixed_color_scale){
+    p <- p + scale_color_distiller(palette = "RdYlBu", direction = -1, limits = c(0, 1))
+  } else {
+    p <- p + scale_color_distiller(palette = "RdYlBu", direction = -1)
+  }
+  
+  
+  p <- p + theme_bw(base_line_size = 0)+
+    labs(color = perturbation, x = colnames(embed_data)[dims[1]], y = colnames(embed_data)[dims[2]])
+  
+  return(p)
+  
+}
