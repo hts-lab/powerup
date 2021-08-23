@@ -351,3 +351,228 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
 
   
 
+
+#' Plot Shapley values vs feature values
+#'
+#' This function plots a scatter of the contribution (Shapley values) of a feature against the value of that feature for each sample.
+#' @param model A model generated with make_xgb_models and has appended predictions with add_predictions.
+#' @param model_data The training dataset used to generate the model.
+#' @param name The name of the perturbation whose prediction we want to plot.
+#' @param n_features The number of top contributors to show their individual contribution. All other predictors will have their contribution combined.
+#' @param n_columns Number of columns to plot in a grid when plotting more than one sample.
+#' @param sample_names The names of the samples we want to highlight.
+#' @param sample_colors If highlighting samples (with sample_names), this is a vector of colors to use.
+#' @keywords plot shapley contribution
+#' @import Seurat ggplot2 cowplot data.table
+#' @export
+#' @examples
+#' plot_shap_scatter(my_models, model_dataset, "ko_ctnnb1", "my_sample", "red")
+plot_shap_scatter <- function(model, name, model_data,
+                              n_features = 4, 
+                              n_columns = 2,
+                              overlay_predictions = FALSE,
+                              sample_names = NULL, 
+                              sample_colors = NULL){     
+  p <- list()
+  
+  if(!overlay_predictions){
+    top_terms <- model$feature_contribution %>% top_n(n_features, wt=value) %>% pull(term)
+  } else {
+    top_terms <- model$new_data$feature_contribution %>% top_n(n_features, wt=value) %>% pull(term)
+  }
+  
+  feature_data <- get_original_data(model,model_data)
+  
+  for (term in top_terms){
+    
+    # Prepare data
+    df <- tibble(sample = rownames(model$shap_values),
+                 x = feature_data[,term],
+                 y = model$shap_values[,term],
+                 y_value = feature_data[,"y_value"],
+                 source = "model")
+    
+    if(!is.null(sample_names)){
+      
+      if(length(sample_colors) != length(sample_names)) sample_colors = gg_color_hue(length(sample_names))
+      
+      selection_df <- tibble(sample = sample_names, pt_color = sample_colors)
+      
+    } 
+    
+    if (overlay_predictions){
+      
+      df_pred <- tibble(sample = rownames(model$new_data$shap_values),
+                        x = model$new_data$data[,term],
+                        y = model$new_data$shap_values[,term],
+                        sample_label = word(rownames(model$new_data$shap_values),2,sep="_"),
+                        source = "prediction")
+      
+      if(!is.null(sample_names)) {
+        df_pred <- df_pred %>% filter(sample %in% sample_names)
+        df_pred <- df_pred %>% left_join(selection_df, by = "sample")
+      }
+      
+    } else {
+      
+      if(!is.null(sample_names)) df <- df %>% left_join(selection_df, by = "sample")
+      
+    }
+    
+    # Make a dummy plot to grab the color legend
+    color_legend = NULL
+    if(!is.null(sample_names)) {
+      
+      legend_p <- ggplot(selection_df, aes(color=sample))+
+        geom_point(x=1,y=1)
+      
+      if(!overlay_predictions){
+        legend_p <- legend_p + scale_color_manual(values = sample_colors, labels = get_cell_line_name(selection_df$sample,sample.info))
+      }
+      
+      legend_p <- legend_p +
+        guides(color = guide_legend(title = if_else(overlay_predictions, "Sample", "Cell Line"), 
+                                    ncol = 8, 
+                                    title.position = "left"))
+      
+      color_legend = get_legend(legend_p)
+      
+    }
+    
+    term_class = feature_data[[term]] %>% class
+    
+    # Make the real plot
+    p[[term]] <- ggplot(df, aes(x=x,y=y,color=y_value))+
+      geom_point(size = 1, alpha = 0.5)
+    
+    if(term_class == 'numeric')  p[[term]] <-  p[[term]] + geom_smooth(formula = y ~ x, method = "loess", se=F,size=1, color="black")
+    
+    
+    if(overlay_predictions){
+      if(!is.null(sample_names)) p[[term]] <- p[[term]] + geom_label(data = df_pred, x=df_pred$x, y=df_pred$y, label=df_pred$sample_label, color = df_pred$pt_color,size=2,na.rm=T)
+      p[[term]] <- p[[term]] + coord_cartesian(xlim = c(min(c(df_pred$x,df$x)), max(c(df_pred$x,df$x))), ylim = c(min(c(df_pred$y, df$y)),max(c(df_pred$y,df$y))))
+    } else {
+      if(!is.null(sample_names)) p[[term]] <- p[[term]] +  geom_point(color=df$pt_color, size = 3, na.rm = T)
+    }
+    
+    perturbation_label <- name %>% word(2, sep = "_") %>% str_to_upper()
+    
+    p[[term]] <- p[[term]] + scale_color_viridis_c() + 
+      labs(x = str_to_upper(term), y = "Shapley Value", color = str_to_upper(term))+
+      guides(color = guide_colorbar(title = glue::glue("Observed {perturbation_label} Dependency"),
+                                    title.position = "left", 
+                                    label.theme = element_text(size = 8, angle = 45, vjust = 1, hjust = 1),
+                                    barheight = 0.5,
+                                    direction = "horizontal",
+                                    title.vjust = 1,
+                                    label=T))
+    
+    # Grab the legend of the first plot and hide all legends
+    if(match(term,top_terms)==1) gradient_legend = get_legend(p[[term]])
+    
+    p[[term]] <-  p[[term]] + theme(legend.position="none")
+    
+  } 
+  
+  p <- plot_grid(plotlist = p, ncol = n_columns, align = 'v')
+  
+  p_legend <- plot_grid(gradient_legend,color_legend,ncol = 1, align='v')
+  
+  # Add the legend at the bottom before returning
+  p <- plot_grid(p,p_legend,ncol=1,rel_heights = c(8,2))
+  
+  return(p)
+}
+
+
+#' Plot SHAP vs Feature Value scatter for training data.
+#'
+#' This function plots the contribution (Shapley values) against the value of a feature.
+#' @param models A list of models generated with make_xgb_models and has appended predictions with add_predictions.
+#' @param models_to_use A vector of model names to plot.
+#' @param model_data The training dataset used to generate the model.
+#' @param n_features The number of top contributors to show their individual contribution. All other predictors will have their contribution combined.
+#' @param n_columns Number of columns to plot in a grid when plotting more than one sample.
+#' @param samples_to_use Optional to highlight specific samples.
+#' @param lineage_to_use Optional to highlight specific samples of certain lineage.
+#' @param sample_colors Color vector to use for samples_to_use.
+#' @keywords plot shapley contribution scatter
+#' @import Seurat ggplot2 cowplot data.table
+#' @export
+#' @examples
+#' plot_shap_scatter_for_training_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")
+plot_shap_scatter_for_training_samples <- function(models, models_to_use, model_data, 
+                                          samples_to_use = NULL, lineage_to_use = NULL, sample_colors = NULL,
+                                          n_features = 6, n_columns = 3){
+  
+  # Restrict the list of models to only those we wish to plot
+  demo_models <- models[models_to_use]
+  
+  # Restrict the sample list to only those we wish to plot
+  samples_to_plot <- map(demo_models, get_demo_samples, samples = samples_to_use, lineage = lineage_to_use, model_data = model_data)
+  
+  # Generate a list of inputs
+  inputs <- list()
+  inputs$model <- demo_models
+  inputs$name <- names(demo_models)
+  inputs$sample_names <- samples_to_plot
+  
+  # Iterate through each input and add the plot to the list
+  pl <- pmap(inputs, plot_shap_scatter,
+             model_data = model_data,
+             n_features = n_features, n_columns = n_columns, 
+             sample_colors = sample_colors)
+  
+  return(pl)
+  
+}
+
+
+
+
+#' Plot SHAP vs Feature Value scatter for new data.
+#'
+#' This function plots the contribution (Shapley values) against the value of a feature.
+#' @param models A list of models generated with make_xgb_models and has appended predictions with add_predictions.
+#' @param models_to_use A vector of model names to plot.
+#' @param model_data The training dataset used to generate the model.
+#' @param n_features The number of top contributors to show their individual contribution. All other predictors will have their contribution combined.
+#' @param n_columns Number of columns to plot in a grid when plotting more than one sample.
+#' @param samples_to_use Optional to highlight specific samples.
+#' @param lineage_to_use Optional to highlight specific samples of certain lineage.
+#' @param sample_colors Color vector to use for samples_to_use.
+#' @keywords plot shapley contribution scatter
+#' @import Seurat ggplot2 cowplot data.table
+#' @export
+#' @examples
+#' plot_shap_scatter_for_new_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")
+plot_shap_scatter_for_new_samples <- function(models, models_to_use, model_data, 
+                                              new_samples_to_use = NULL, sample_colors = NULL,
+                                              n_features = 6, n_columns = 3){
+  
+  # Restrict the list of models to only those we wish to plot
+  demo_models <- models[models_to_use]
+  
+  # Restrict the sample list to only those we wish to plot
+  samples_to_plot <- map(demo_models, "new_data") %>%
+    map("data") %>%
+    map(rownames)
+  
+  if(!is.null(new_samples_to_use) && length(new_samples_to_use) > 0) samples_to_plot <- samples_to_plot %>% map(intersect, new_samples_to_use)
+  
+  # Generate a list of inputs
+  inputs <- list()
+  inputs$model <- demo_models
+  inputs$name <- names(demo_models)
+  inputs$sample_names <- samples_to_plot
+  
+  # Iterate through each input and add the plot to the list
+  pl <- pmap(inputs, plot_shap_scatter,
+             model_data = model_data,
+             n_features = n_features, n_columns = n_columns, 
+             sample_colors = sample_colors, overlay_predictions = TRUE)
+  
+  return(pl)
+  
+}
+
