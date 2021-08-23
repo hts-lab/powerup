@@ -429,7 +429,7 @@ plot_shap_scatter <- function(model, name, model_data,
       if(!overlay_predictions){
         if(!is.null(sample_info)){
           legend_p <- legend_p + scale_color_manual(values = sample_colors, 
-                                                    labels = get_cell_line_name(selection_df$sample,sample_info))
+                                                    labels = get_cell_line_name(selection_df$sample, sample_info = sample_info))
         } else {
           legend_p <- legend_p + scale_color_manual(values = sample_colors, 
                                                     labels = selection_df$sample)
