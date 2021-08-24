@@ -325,7 +325,7 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
   demo_models <- models[models_to_use]
   
   # Restrict the sample list to only those we wish to plot
-  samples_to_plot <- map(my_models_with_predictions[example_perturbation], "new_data") %>% 
+  samples_to_plot <- map(demo_models, "new_data") %>% 
     map("data") %>% 
     map(rownames)
   
