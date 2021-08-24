@@ -371,7 +371,7 @@ plot_shap_scatter <- function(model, name, model_data,
                               n_features = 4, 
                               n_columns = 2,
                               overlay_predictions = FALSE,
-                              sample_names = NULL, 
+                              sample_names = NULL, remove_prefix = TRUE,
                               sample_colors = NULL,
                               sample_info = NULL){     
   p <- list()
@@ -406,7 +406,7 @@ plot_shap_scatter <- function(model, name, model_data,
       df_pred <- tibble(sample = rownames(model$new_data$shap_values),
                         x = model$new_data$data[,term],
                         y = model$new_data$shap_values[,term],
-                        sample_label = word(rownames(model$new_data$shap_values),2,sep="_"),
+                        sample_label = if_else(remove_prefix, word(rownames(model$new_data$shap_values),2,sep="_"), rownames(model$new_data$shap_values)) ,
                         source = "prediction")
       
       if(!is.null(sample_names)) {
