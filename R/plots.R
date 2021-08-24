@@ -554,7 +554,7 @@ plot_shap_scatter_for_training_samples <- function(models, models_to_use, model_
 #' @examples
 #' plot_shap_scatter_for_new_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")
 plot_shap_scatter_for_new_samples <- function(models, models_to_use, model_data, 
-                                              new_samples_to_use = NULL, sample_colors = NULL,
+                                              new_samples_to_use = NULL, remove_prefix = TRUE, sample_colors = NULL,
                                               n_features = 6, n_columns = 3){
   
   # Restrict the list of models to only those we wish to plot
@@ -577,7 +577,7 @@ plot_shap_scatter_for_new_samples <- function(models, models_to_use, model_data,
   pl <- pmap(inputs, plot_shap_scatter,
              model_data = model_data,
              n_features = n_features, n_columns = n_columns, 
-             sample_colors = sample_colors, overlay_predictions = TRUE)
+             sample_colors = sample_colors, overlay_predictions = TRUE, remove_prefix = remove_prefix)
   
   return(pl)
   
