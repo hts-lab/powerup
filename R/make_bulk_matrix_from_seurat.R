@@ -71,7 +71,7 @@ make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
     show_msg("Found {length(sig_markers)} differentially expressed genes at FDR < {qvalue_cutoff} ..")
 
     # Also include the most variable genes overall (if they're not included in the above list already)
-    DefaultAssay(my_obj) <- scrna_assay_vars
+    DefaultAssay(scrna_data) <- scrna_assay_vars
     scrna_data <- FindVariableFeatures(scrna_data, nfeatures = scrna_var_nfeatures)
     var_vars <- VariableFeatures(scrna_data, assay = scrna_assay_vars)
     show_msg("Found {length(var_vars)} variable features ..")
