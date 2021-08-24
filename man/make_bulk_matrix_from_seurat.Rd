@@ -13,6 +13,7 @@ make_bulk_matrix_from_seurat(
   scrna_test_markers = "MAST",
   scrna_logfc = 0.585,
   scrna_minpct = 0.25,
+  scrna_var_nfeatures = 3000,
   scrna_label_prefix = "cluster",
   pseudocount = 0.083,
   qvalue_cutoff = 0.05,
