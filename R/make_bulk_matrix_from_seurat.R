@@ -26,6 +26,7 @@
 #' make_bulk_matrix_from_seurat("./data","my_seurat_object")
 make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
                                                scrna_group_cells_by = "seurat_clusters",
+                                               scrna_groups_to_keep = NULL,
                                                scrna_assay_markers = "SCT",
                                                scrna_assay_vars = "SCT",
                                                scrna_test_markers = "MAST",
@@ -43,9 +44,15 @@ make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
     show_msg("Loading {scrna_name} ..")
     scrna_data <- readRDS(glue::glue("{scrna_folder}/{scrna_name}.rds"))
 
+    Idents(scrna_data) <- scrna_group_cells_by
+    if(!is.null(scrna_groups_to_keep)){
+        scrna_data@meta.data <- scrna_data@meta.data %>% 
+            dplyr::mutate(g.to.keep = if_else(get(scrna_group_cells_by) %in% scrna_groups_to_keep, TRUE, FALSE))
+        scrna_data <- subset(scrna_data, subset = g.to.keep) 
+    } 
+  
     # Find or Load Markers
     scrna_markers <- glue::glue("{scrna_folder}/{scrna_name}.{scrna_group_cells_by}.markers")
-    Idents(scrna_data) <- scrna_group_cells_by
     if (!file.exists(scrna_markers) | force_find_markers){
 
         show_msg("Finding markers for {scrna_name} ..")
