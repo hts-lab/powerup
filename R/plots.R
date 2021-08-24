@@ -406,7 +406,7 @@ plot_shap_scatter <- function(model, name, model_data,
       df_pred <- tibble(sample = rownames(model$new_data$shap_values),
                         x = model$new_data$data[,term],
                         y = model$new_data$shap_values[,term],
-                        sample_label = if_else(rep(remove_prefix,rownames(model$new_data$shap_values)), word(rownames(model$new_data$shap_values),2,sep="_"), rownames(model$new_data$shap_values)) ,
+                        sample_label = if_else(rep(remove_prefix,length(rownames(model$new_data$shap_values))), word(rownames(model$new_data$shap_values),2,sep="_"), rownames(model$new_data$shap_values)) ,
                         source = "prediction")
       
       if(!is.null(sample_names)) {
