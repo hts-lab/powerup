@@ -10,7 +10,7 @@
 #' @param nfolds The number of folds in k-fold cross validation.
 #' @param nrepeats The number of repeats in k-fold cross validation.
 #' @param nrounds The maximum number of trees in the XGBoost model.
-#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param min_score The minimum R^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
@@ -339,7 +339,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 #' @param nfolds The number of folds in k-fold cross validation.
 #' @param nrepeats The number of repeats in k-fold cross validation.
 #' @param nrounds The maximum number of trees in the XGBoost model.
-#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param min_score The minimum R^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
