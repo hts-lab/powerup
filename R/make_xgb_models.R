@@ -353,7 +353,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               response_cutoff = 0.5,
                               weight_cap = 0,
                               nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                              skip_eval = FALSE, use_gpu = TRUE){
+                              skip_eval = FALSE, use_gpu = TRUE, gpu_id = 0){
   
   my_models <- map2(
     models_to_make, seq_along(models_to_make), make_xgb_model,  
@@ -361,7 +361,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     dataset = depmap_data,
     response_cutoff = response_cutoff, weight_cap = weight_cap,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-    skip_eval = skip_eval, use_gpu = use_gpu)
+    skip_eval = skip_eval, use_gpu = use_gpu, gpu_id = gpu_id)
   
   names(my_models) <- models_to_make
   
@@ -397,7 +397,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 model_dataset, response_cutoff = 0.5,
                                 weight_cap = 0,
                                 nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                                skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+                                skip_eval = FALSE, use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
   
   library(tidyverse)
   library(glue)
@@ -416,7 +416,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                  response_cutoff = response_cutoff,
                                  weight_cap = weight_cap,
                                  nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-                                 skip_eval = skip_eval, use_gpu = use_gpu)
+                                 skip_eval = skip_eval, use_gpu = use_gpu, gpu_id = gpu_id)
   
   if(is.null(path)) path = "."
   
