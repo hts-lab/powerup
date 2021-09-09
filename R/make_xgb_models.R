@@ -225,6 +225,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                   nthread = 16,
                   max_bin = 64,
                   tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                  gpu_id = 2,
                   nrounds = nrounds,
                   early_stopping_rounds = 10, 
                   verbose = 0) %>%
@@ -273,6 +274,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                           nthread = 16,
                           max_bin = 64,
                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                          gpu_id = 2,
                           nrounds = last_nrounds, 
                           early_stopping_rounds = 10, verbose = 0)
     
