@@ -26,7 +26,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             nrounds = 100, 
                             min_score = 0.5, 
                             skip_eval = FALSE,
-                            use_gpu = TRUE){
+                            use_gpu = TRUE, gpu_id = 0){
   
   cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
@@ -225,7 +225,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                   nthread = 16,
                   max_bin = 64,
                   tree_method = if_else(use_gpu,"gpu_hist","auto"),
-                  gpu_id = 2,
+                  gpu_id = gpu_id,
                   nrounds = nrounds,
                   early_stopping_rounds = 10, 
                   verbose = 0) %>%
@@ -274,7 +274,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                           nthread = 16,
                           max_bin = 64,
                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
-                          gpu_id = 2,
+                          gpu_id = gpu_id,
                           nrounds = last_nrounds, 
                           early_stopping_rounds = 10, verbose = 0)
     
