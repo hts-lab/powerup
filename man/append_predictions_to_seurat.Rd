@@ -7,6 +7,7 @@
 append_predictions_to_seurat(
   scrna_folder,
   scrna_name,
+  predictions_table,
   scrna_group_cells_by = "seurat_clusters"
 )
 }
@@ -14,6 +15,8 @@ append_predictions_to_seurat(
 \item{scrna_folder}{Folder that hosts the Seurat object.}
 
 \item{scrna_name}{Name of the Seurat object (without .rds).}
+
+\item{predictions_table}{The predictions table}
 
 \item{scrna_group_cells_by}{The name of the column in the metadata to group by (default = "seurat_clusters").}
 }

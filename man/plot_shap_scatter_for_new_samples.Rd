@@ -9,6 +9,7 @@ plot_shap_scatter_for_new_samples(
   models_to_use,
   model_data,
   new_samples_to_use = NULL,
+  remove_prefix = TRUE,
   sample_colors = NULL,
   n_features = 6,
   n_columns = 3
