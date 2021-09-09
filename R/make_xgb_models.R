@@ -10,7 +10,7 @@
 #' @param nfolds The number of folds in k-fold cross validation.
 #' @param nrepeats The number of repeats in k-fold cross validation.
 #' @param nrounds The maximum number of trees in the XGBoost model.
-#' @param min_score The minimum R^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param min_score The minimum number of r value for a model to be considered for the next stage (making predictions and calculating SHAP values).
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
@@ -339,7 +339,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 #' @param nfolds The number of folds in k-fold cross validation.
 #' @param nrepeats The number of repeats in k-fold cross validation.
 #' @param nrounds The maximum number of trees in the XGBoost model.
-#' @param min_score The minimum R^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param min_score The minimum number of r^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
@@ -364,5 +364,103 @@ fit_depmap_models <- function(depmap_data, models_to_make,
   names(my_models) <- models_to_make
   
   return(my_models)
+  
+}
+
+
+
+
+#' Make a list of models and save as file
+#'
+#' This function creates an XGBoost model for each perturbation given, saves the list of models, and returns a message.
+#' @param perturbs A vector of perturbations.
+#' @param chunk_indx Integer index used, for progress report.
+#' @param model_dataset A dataframe with the perturbation in a column and all other predictors. Sample names are row names.
+#' @param response_cutoff The value above which the sample is considered sensitive.
+#' @param weight_cap The maximum weight of each minority case when resampling. Set to 0 if no resampling needed.
+#' @param nfolds The number of folds in k-fold cross validation.
+#' @param nrepeats The number of repeats in k-fold cross validation.
+#' @param nrounds The maximum number of trees in the XGBoost model.
+#' @param min_score The minimum number of r^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
+#' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
+#' @param seed Random seed
+#' @param path Folder path (e.g. "/home/test/models") to save models in.
+#' @keywords model
+#' @import xgboost purrr fastshap tidyverse glue lubridate tidymodels rsample
+#' @export
+#' @examples
+#' fit_models_and_save(my_data, c("ko_ctnnb1","ko_myod1"))
+fit_models_and_save <- function(perturbs, chunk_indx, 
+                                model_dataset, response_cutoff = 0.5,
+                                weight_cap = 0,
+                                nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+  
+  library(tidyverse)
+  library(glue)
+  library(purrr)
+  library(lubridate)
+  library(tidymodels)
+  library(rsample)
+  library(xgboost)
+  library(fastshap)
+  library(mixmap)
+  
+  set.seed(seed)
+  
+  my_models <- fit_depmap_models(depmap_data = model_dataset, 
+                                 models_to_make = perturbs, 
+                                 response_cutoff = response_cutoff,
+                                 weight_cap = weight_cap,
+                                 nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+                                 skip_eval = skip_eval, use_gpu = use_gpu)
+  
+  if(is.null(path)) path = "."
+  
+  saveRDS(my_models,glue::glue("{path}/models_chunk_{chunk_indx}.rds"))
+  
+  return(glue::glue("Done chunk {chunk_indx}"))
+  
+}
+
+
+
+
+#' Make a list of models and save as file (parallel)
+#'
+#' This function creates an XGBoost model for each perturbation given, saves the list of models, and returns a message.
+#' @param perturbs A vector of perturbations.
+#' @param chunk_indx Integer index used, for progress report.
+#' @param model_dataset A dataframe with the perturbation in a column and all other predictors. Sample names are row names.
+#' @param response_cutoff The value above which the sample is considered sensitive.
+#' @param weight_cap The maximum weight of each minority case when resampling. Set to 0 if no resampling needed.
+#' @param nfolds The number of folds in k-fold cross validation.
+#' @param nrepeats The number of repeats in k-fold cross validation.
+#' @param nrounds The maximum number of trees in the XGBoost model.
+#' @param min_score The minimum number of r^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
+#' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
+#' @param seed Random seed
+#' @param path Folder path (e.g. "/home/test/models") to save models in.
+#' @keywords model
+#' @import xgboost purrr furrr future fastshap tidyverse glue lubridate tidymodels rsample
+#' @export
+#' @examples
+#' fit_models_in_parallel(my_data, c("ko_ctnnb1","ko_myod1"))
+fit_models_in_parallel <- function(perturbs, chunk_size = 20, 
+                                   model_dataset, response_cutoff = 0.5,
+                                   weight_cap = 0,
+                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                   skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+
+  perturb_splits <- split(perturbs, ceiling(seq_along(perturbs)/chunk_size))
+  furrr::future_map2(perturb_splits,seq_along(perturb_splits),fit_models_and_save,
+                     model_dataset = model_dataset, response_cutoff = response_cutoff,
+                     weight_cap = weight_cap,
+                     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+                     skip_eval = skip_eval, use_gpu = use_gpu, seed = seed, path = path)
+  
+  return("Done")
   
 }

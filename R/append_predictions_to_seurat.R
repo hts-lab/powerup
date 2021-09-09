@@ -4,6 +4,7 @@
 #' @param scrna_folder Folder that hosts the Seurat object.
 #' @param scrna_name Name of the Seurat object (without .rds).
 #' @param scrna_group_cells_by The name of the column in the metadata to group by (default = "seurat_clusters").
+#' @param predictions_table The predictions table
 #' @keywords seurat predictions
 #' @import tidyr
 #' @import dplyr
@@ -14,7 +15,7 @@
 #' @export
 #' @examples
 #' append_predictions_to_seurat("./data","my_seurat_object")
-append_predictions_to_seurat <- function(scrna_folder, scrna_name,
+append_predictions_to_seurat <- function(scrna_folder, scrna_name, predictions_table,
                                          scrna_group_cells_by = "seurat_clusters"){
   
   show_msg("Loading {scrna_name} ..")
