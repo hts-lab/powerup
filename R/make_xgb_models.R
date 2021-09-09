@@ -454,10 +454,18 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                                    model_dataset, response_cutoff = 0.5,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                                   skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+                                   skip_eval = FALSE, use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
 
   perturb_splits <- split(perturbs, ceiling(seq_along(perturbs)/chunk_size))
-  furrr::future_map2(perturb_splits,seq_along(perturb_splits),fit_models_and_save,
+  
+  # Generate a list of inputs
+  inputs <- list()
+  inputs$perturbs <- perturb_splits
+  inputs$chunk_indx <- seq_along(perturb_splits)
+  inputs$gpu_id <- rep(gpu_id,length.out=length(perturb_splits))
+  
+  fit_models_and_save(chunk_indx = )
+  furrr::future_pmap(inputs,fit_models_and_save,
                      model_dataset = model_dataset, response_cutoff = response_cutoff,
                      weight_cap = weight_cap,
                      nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
