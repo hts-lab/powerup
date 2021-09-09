@@ -464,7 +464,6 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
   inputs$chunk_indx <- seq_along(perturb_splits)
   inputs$gpu_id <- rep(gpu_id,length.out=length(perturb_splits))
   
-  fit_models_and_save(chunk_indx = )
   furrr::future_pmap(inputs,fit_models_and_save,
                      model_dataset = model_dataset, response_cutoff = response_cutoff,
                      weight_cap = weight_cap,
