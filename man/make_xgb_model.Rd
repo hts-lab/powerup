@@ -16,7 +16,9 @@ make_xgb_model(
   nrounds = 100,
   min_score = 0.5,
   skip_eval = FALSE,
-  use_gpu = TRUE
+  shuffle = FALSE,
+  use_gpu = TRUE,
+  gpu_id = 0
 )
 }
 \arguments{

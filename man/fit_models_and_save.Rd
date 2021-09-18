@@ -15,7 +15,9 @@ fit_models_and_save(
   nrounds = 200,
   min_score = 0.5,
   skip_eval = FALSE,
+  shuffle = FALSE,
   use_gpu = TRUE,
+  gpu_id = 0,
   seed = 123,
   path = NULL
 )

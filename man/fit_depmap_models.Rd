@@ -14,7 +14,9 @@ fit_depmap_models(
   nrounds = 200,
   min_score = 0.5,
   skip_eval = FALSE,
-  use_gpu = TRUE
+  shuffle = FALSE,
+  use_gpu = TRUE,
+  gpu_id = 0
 )
 }
 \arguments{

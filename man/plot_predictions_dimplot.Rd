@@ -7,7 +7,11 @@
 plot_predictions_dimplot(
   scRNA_data,
   perturbation,
+  group_by = NULL,
   reduction = "umap",
+  pt_size = 0.25,
+  show_labels = F,
+  label_size = 3,
   dims = c(1, 2),
   fixed_color_scale = FALSE
 )

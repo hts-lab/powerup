@@ -15,7 +15,9 @@ fit_models_in_parallel(
   nrounds = 200,
   min_score = 0.5,
   skip_eval = FALSE,
+  shuffle = FALSE,
   use_gpu = TRUE,
+  gpu_id = c(0),
   seed = 123,
   path = NULL
 )
