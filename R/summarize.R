@@ -14,10 +14,15 @@ summarize_models <- function(models){
     as_tibble() %>%
     pivot_longer(everything(),names_to="brd",values_to="n_terms")
   
-  error_table <- map(models[n_term_table %>% filter(n_terms > 0) %>% pull(brd)],"predictions_error") %>% 
-    map(mean, na.rm = T) %>% 
-    as_tibble() %>%
-    pivot_longer(everything(),names_to="brd",values_to="error")
+  
+  good_models = n_term_table %>% filter(n_terms > 0) %>% pull(brd)
+  if(length(good_models) > 0){
+    
+    error_table <- map(models[n_term_table %>% filter(n_terms > 0) %>% pull(brd)],"predictions_error") %>% 
+      map(mean, na.rm = T) %>% 
+      as_tibble() %>%
+      pivot_longer(everything(),names_to="brd",values_to="error")
+  } 
   
   r_table <- map(models,"scores") %>%
     map(mean) %>% 
@@ -32,10 +37,10 @@ summarize_models <- function(models){
   
   scores_table <- r_table %>%
     left_join(r_squared_table, by = "brd") %>%
-    left_join(error_table, by = "brd") %>% 
     left_join(n_term_table, by = "brd") %>%
     arrange(desc(r))  
   
+  if(length(good_models)>0) scores_table <- scores_table %>% left_join(error_table, by = "brd")  
   
   return(scores_table)
   
