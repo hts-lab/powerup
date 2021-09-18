@@ -26,7 +26,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             nrounds = 100, 
                             min_score = 0.5, 
                             skip_eval = FALSE,
-                            use_gpu = TRUE){
+                            shuffle = FALSE,
+                            use_gpu = TRUE, gpu_id = 0){
   
   cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
@@ -200,9 +201,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     if(weight_cap > 0){    
       training_weights <- training_sets %>% map(pull, y_value) %>% map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
       # training_matrices <- training_sets %>% map2(training_weights, get_weighted_set) %>% map(get_DMatrix)
-      training_matrices <- training_sets %>% map2(training_weights, get_DMatrix)
+      training_matrices <- training_sets %>% map2(training_weights, get_DMatrix, shuffle = shuffle)
     } else {
-      training_matrices <- training_sets %>% map(get_DMatrix)
+      training_matrices <- training_sets %>% map(get_DMatrix, shuffle = shuffle)
     }
     
     # Grab the assessment parts, for each: do as above + pull the y_values for later use
@@ -225,6 +226,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                   nthread = 16,
                   max_bin = 64,
                   tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                  gpu_id = gpu_id,
                   nrounds = nrounds,
                   early_stopping_rounds = 10, 
                   verbose = 0) %>%
@@ -273,6 +275,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                           nthread = 16,
                           max_bin = 64,
                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                          gpu_id = gpu_id,
                           nrounds = last_nrounds, 
                           early_stopping_rounds = 10, verbose = 0)
     
@@ -351,7 +354,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               response_cutoff = 0.5,
                               weight_cap = 0,
                               nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                              skip_eval = FALSE, use_gpu = TRUE){
+                              skip_eval = FALSE, shuffle = FALSE, use_gpu = TRUE, gpu_id = 0){
   
   my_models <- map2(
     models_to_make, seq_along(models_to_make), make_xgb_model,  
@@ -359,7 +362,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     dataset = depmap_data,
     response_cutoff = response_cutoff, weight_cap = weight_cap,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-    skip_eval = skip_eval, use_gpu = use_gpu)
+    skip_eval = skip_eval, shuffle = shuffle, use_gpu = use_gpu, gpu_id = gpu_id)
   
   names(my_models) <- models_to_make
   
@@ -395,7 +398,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 model_dataset, response_cutoff = 0.5,
                                 weight_cap = 0,
                                 nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                                skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+                                skip_eval = FALSE, shuffle = FALSE, use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
   
   library(tidyverse)
   library(glue)
@@ -414,7 +417,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                  response_cutoff = response_cutoff,
                                  weight_cap = weight_cap,
                                  nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-                                 skip_eval = skip_eval, use_gpu = use_gpu)
+                                 skip_eval = skip_eval, shuffle = shuffle, use_gpu = use_gpu, gpu_id = gpu_id)
   
   if(is.null(path)) path = "."
   
@@ -452,14 +455,21 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                                    model_dataset, response_cutoff = 0.5,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
-                                   skip_eval = FALSE, use_gpu = TRUE, seed = 123, path = NULL){
+                                   skip_eval = FALSE, shuffle = FALSE, use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
 
   perturb_splits <- split(perturbs, ceiling(seq_along(perturbs)/chunk_size))
-  furrr::future_map2(perturb_splits,seq_along(perturb_splits),fit_models_and_save,
+  
+  # Generate a list of inputs
+  inputs <- list()
+  inputs$perturbs <- perturb_splits
+  inputs$chunk_indx <- seq_along(perturb_splits)
+  inputs$gpu_id <- rep(gpu_id,length.out=length(perturb_splits))
+  
+  furrr::future_pmap(inputs,fit_models_and_save,
                      model_dataset = model_dataset, response_cutoff = response_cutoff,
                      weight_cap = weight_cap,
                      nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-                     skip_eval = skip_eval, use_gpu = use_gpu, seed = seed, path = path)
+                     skip_eval = skip_eval, shuffle = shuffle, use_gpu = use_gpu, seed = seed, path = path)
   
   return("Done")
   

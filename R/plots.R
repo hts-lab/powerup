@@ -66,21 +66,59 @@ plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "t
 #' @export
 #' @examples
 #' plot_predictions_dimplot(my_seurat_obj, "ko_ctnnb1")
-plot_predictions_dimplot <- function(scRNA_data, perturbation, 
-                                     reduction = "umap",
-                                     dims = c(1,2),
-                                     fixed_color_scale = FALSE){
+plot_predictions_dimplot <- function(scRNA_data, perturbation, group_by = NULL,
+                                        reduction = "umap", pt_size = 0.25, show_labels = F, label_size = 3,
+                                        dims = c(1,2),
+                                        fixed_color_scale = FALSE){
   
-  feature_data <- scRNA_data@meta.data[,perturbation]
-  embed_data <- scRNA_data[[reduction]]@cell.embeddings
-  dim_1 <- embed_data[,dims[1]]
-  dim_2 <- embed_data[,dims[2]]
+  feature_data <- scRNA_data@meta.data %>% select(all_of(perturbation)) %>% as_tibble(rownames = "cell_id")
+  colnames(feature_data) <- c("cell_id","feature_data")
   
-  plot_data <- embed_data %>% cbind(feature_data)
+  if(!is.null(group_by)){
+    cluster_data <- scRNA_data@meta.data %>% select(all_of(group_by)) %>% as_tibble(rownames = "cell_id")
+    feature_data <- feature_data %>% left_join(cluster_data, by = "cell_id")
+    colnames(feature_data) <- c("cell_id","feature_data","cluster_data")
+  } 
+  
+  embed_data <- scRNA_data[[reduction]]@cell.embeddings %>% as_tibble(rownames = "cell_id")
+  
+  
+  cell_ids <- embed_data[,1]
+  dim_1 <- embed_data[,dims[1]+1]
+  dim_2 <- embed_data[,dims[2]+1]
+  
+  
+  dim1_name = colnames(embed_data)[dims[1]+1]
+  dim2_name = colnames(embed_data)[dims[2]+1]
+  
+  
+  embed_data <- tibble(cell_ids,dim_1,dim_2)
+  colnames(embed_data) <- c("cell_id",dim1_name,dim2_name)
+  
+  
+  plot_data <- embed_data %>% left_join(feature_data, by = "cell_id")
+  
+  
+  
+  if(!is.null(group_by)){
+    label_data <- plot_data %>% select(all_of(c(dim1_name,dim2_name,"cluster_data")))
+    
+    label_data <- label_data %>% group_by(cluster_data) %>% summarize(mean_x = median(get(dim1_name)),
+                                                                      mean_y = median(get(dim2_name)))   
+    
+  }
+  
+  
   
   
   p <- ggplot()+
-    geom_point(aes(x=dim_1,y=dim_2,color=feature_data))
+    geom_point(data = plot_data, aes(x=get(dim1_name),y=get(dim2_name),color=feature_data), size = pt_size)
+  
+  
+  if(!is.null(group_by) && show_labels){
+    p <- p + 
+      geom_text(aes(x=label_data$mean_x,y=label_data$mean_y,label=label_data$cluster_data),size=label_size)
+  }
   
   if(fixed_color_scale){
     p <- p + scale_color_distiller(palette = "RdYlBu", direction = -1, limits = c(0, 1))
