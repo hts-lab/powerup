@@ -21,6 +21,7 @@ show_msg <- function(x){
 #' This function prints "hello" to test something.
 #' @param x Name of person to say hello to.
 #' @keywords hello
+#' @export
 #' @examples
 #' say_hello("Mush")
 say_hello <- function(x){
