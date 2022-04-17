@@ -16,6 +16,24 @@ show_msg <- function(x){
 
 
 
+#' Some random new function
+#'
+#' This function prints "hello" to test something.
+#' @param x Name of person to say hello to.
+#' @keywords hello
+#' @import
+#' @export
+#' @examples
+#' say_hello("Mush")
+say_hello <- function(x){
+  
+  cat(paste("Hello ",x),sep = "\n")
+  flush.console()
+  
+}
+
+
+
 
 #' Extract ggplot legend
 #'
