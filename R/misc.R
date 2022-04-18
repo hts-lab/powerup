@@ -16,19 +16,22 @@ show_msg <- function(x){
 
 
 
-#' Some random new function
+
+
+
+#' Download study files into data folder
 #'
-#' This function prints "hello" to test something.
-#' @param x Name of person to say hello to.
-#' @keywords hello
+#' This function reads a samples table and downloads the data
+#' @param samples_table A samples table with the necessary columns.
+#' @keywords download data samples
+#' @import glue
 #' @export
 #' @examples
-#' say_hello("Mush")
-say_hello <- function(x){
-  
-  cat(paste("Hello ",x),sep = "\n")
-  flush.console()
-  
+#' download_data(samples_table, work_dir)
+download_data <- function(samples_table, work_dir = "./"){
+  show_msg("Started downloading data...")
+  system(glue("{samples_table$study_dl_command} {samples_table$study_path} {work_dir}/data/{samples_table$study_name}.{str_split_fixed(samples_table$study_path,'\\\\.',2)[2]}"))
+  show_msg("Finished downloading data.")
 }
 
 
