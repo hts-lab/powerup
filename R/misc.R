@@ -25,6 +25,7 @@ show_msg <- function(x){
 #' @param samples_table A samples table with the necessary columns.
 #' @keywords download data samples
 #' @import glue
+#' @import stringr
 #' @export
 #' @examples
 #' download_data(samples_table, work_dir)
