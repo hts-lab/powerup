@@ -52,7 +52,8 @@ make_bulk_matrix_from_files <- function(bulk_files, pseudocount = 1){
     dplyr::rowwise() %>% dplyr::mutate(var = var(dplyr::c_across(-"gene")))
 
     # Arrange by variance
-    bulk_data <- bulk_data %>% dplyr::filter(var > 0) %>% dplyr::arrange(desc(var)) %>% dplyr::ungroup()
+    # Note: If we want to filter out zero-variacne genes, add %>% dplyr::filter(var > 0)
+    bulk_data <- bulk_data %>% dplyr::arrange(desc(var)) %>% dplyr::ungroup()
 
     # Convert to matrix
     bulk_data <- bulk_data %>% dplyr::select(-"var") %>% column_to_rownames("gene") %>% t %>% as.matrix()
