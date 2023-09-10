@@ -294,8 +294,15 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     error_data <- xgb.DMatrix(data = model_data$original_data %>% select(-"y_value",-"response") %>% as.matrix(),
                               label = errors)
     
-    # Fit a model on error (using default params for now)
-    error_model <- xgboost(data = error_data, nrounds = 100, early_stopping_rounds = 10, verbose = 0) 
+    # Fit a model on error (using default params)
+    error_model <- xgboost(data = error_data, 
+                           nrounds = 100, early_stopping_rounds = 10, 
+                           max_bin = 64,
+                           nthread = n_threads,
+                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                           gpu_id = gpu_id,
+                           verbose = 0) 
+    
     cat(glue::glue(" E = +/- {round(1.96*sqrt(mean(errors,na.rm=T)),3)}"), sep = "\n")
     flush.console()
     
