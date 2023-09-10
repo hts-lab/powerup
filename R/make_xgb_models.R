@@ -422,22 +422,35 @@ fit_models_and_save <- function(perturbs, chunk_indx,
   library(fastshap)
   library(mixmap)
   
-  set.seed(seed)
+  if (is.null(path)) path = "."
   
-  my_models <- fit_depmap_models(depmap_data = model_dataset, 
-                                 models_to_make = perturbs, 
-                                 response_cutoff = response_cutoff,
-                                 weight_cap = weight_cap,
-                                 nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
-                                 skip_eval = skip_eval, shuffle = shuffle,
-                                 n_threads = n_threads,
-                                 use_gpu = use_gpu, gpu_id = gpu_id)
+  if (!file.exists(glue::glue("{path}/models_chunk_{chunk_indx}.rds"))){
+    
+    set.seed(seed)
+    
+    my_models <- fit_depmap_models(depmap_data = model_dataset, 
+                                   models_to_make = perturbs, 
+                                   response_cutoff = response_cutoff,
+                                   weight_cap = weight_cap,
+                                   nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+                                   skip_eval = skip_eval, shuffle = shuffle,
+                                   n_threads = n_threads,
+                                   use_gpu = use_gpu, gpu_id = gpu_id)
+    
+    
+    
+    saveRDS(my_models,glue::glue("{path}/models_chunk_{chunk_indx}.rds"))
+    
+    return(glue::glue("Done chunk {chunk_indx}"))
+    
+  } else {
+    
+    
+    return(glue::glue("Chunk already done {chunk_indx}"))
+    
+    
+  }
   
-  if(is.null(path)) path = "."
-  
-  saveRDS(my_models,glue::glue("{path}/models_chunk_{chunk_indx}.rds"))
-  
-  return(glue::glue("Done chunk {chunk_indx}"))
   
 }
 
