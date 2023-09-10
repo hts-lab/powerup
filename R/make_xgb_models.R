@@ -180,6 +180,30 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
   
   
+  # If the SD is zero, cor() will throw an error
+  get_pseudo_cor <- function(x, y){
+    
+    if (sd(x) == 0 | sd(y) == 0){
+      
+      x[1] = x[1] + 1e-6
+      y[1] = y[1] + 1e-6
+      
+    } else {
+      
+      # Do nothing
+      
+    }
+    
+    return(cor(x,y))
+    
+    
+  }
+  
+  
+  get_rmse <- function(x, y){
+    return( sqrt( mean( (x - y)^2  ) ) )
+  }
+  
   
   # Step 1: Prepare the data (keep only this perturbation's outcome values and split into folds)
   model_data <- prepare_model_data(perturbation = perturbation, 
@@ -222,26 +246,32 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     #validation_matrices <- map(validation_matrices, get_DMatrix)
     
     # Use the analysis subsets for creating a model, then use the assessment subset to make predictions and calculate correlation
-    scores <- map(training_matrices, xgboost, 
-                  params = model_params,
-                  nthread = n_threads,
-                  max_bin = 64,
-                  tree_method = if_else(use_gpu,"gpu_hist","auto"),
-                  gpu_id = gpu_id,
-                  nrounds = nrounds,
-                  early_stopping_rounds = 10, 
-                  verbose = 0) %>%
-      map2(validation_matrices, predict) %>% map2(validation_y_values, cor) %>% unlist()
+    score_models <- map(training_matrices, xgboost, 
+                        params = model_params,
+                        nthread = n_threads,
+                        max_bin = 64,
+                        tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                        gpu_id = gpu_id,
+                        nrounds = nrounds,
+                        early_stopping_rounds = 10, 
+                        verbose = 0)
+    
+    score_predictions <-  score_models %>% map2(validation_matrices, predict)
+    
+    scores <- score_predictions %>% map2(validation_y_values, get_pseudo_cor) %>% unlist()
+    
+    scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
     
     
   } else {
     
     scores <- rep(1,9)
+    scores_rmse <- rep(0,9)
     
   }        
   
   
-  cat(glue::glue(" R^2 = {round(mean(scores^2),3)} +/- {round(1.96*sd(scores^2),3)} (n={length(scores)})"))
+  cat(glue::glue(" R^2 = {round(mean(scores^2),3)} +/- {round(1.96*sd(scores^2),3)} , RMSE = {round(mean(scores_rmse),5)} , (n={length(scores)})"))
   flush.console()
   
   
@@ -249,9 +279,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output <- list()  
   output$perturbation_name <- perturbation
   output$scores <- scores
+  output$scores_rmse <- scores_rmse
   
   # If the score is good enough, we proceed with extra steps                                                                              
-  if (mean(scores^2) > min_score){
+  if (!is.na(mean(scores)) & mean(scores^2) >= min_score){
     
     # Fit one last model using all data    
     last_params <- model_params # Ideally we have found the best params and we set them here
