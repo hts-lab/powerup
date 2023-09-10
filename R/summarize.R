@@ -17,8 +17,8 @@ summarize_models <- function(models){
   
   good_models = n_term_table %>% filter(n_terms > 0) %>% pull(brd)
   if(length(good_models) > 0){
-    
     error_table <- map(models[n_term_table %>% filter(n_terms > 0) %>% pull(brd)],"predictions_error") %>% 
+      map(function(x) x^2) %>%
       map(mean, na.rm = T) %>% 
       as_tibble() %>%
       pivot_longer(everything(),names_to="brd",values_to="error")

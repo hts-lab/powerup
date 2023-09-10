@@ -318,12 +318,12 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     null_prediction <- predict(last_model, newdata = last_matrix) %>% mean()
     
     # Create an error estimate
-    errors <- (last_predictions - model_data$original_data$y_value)^2
+    errors <- (last_predictions - model_data$original_data$y_value)
     names(errors) <- rownames(model_data$original_data)
     
     # Create a matrix of errors vs features
     error_data <- xgb.DMatrix(data = model_data$original_data %>% select(-"y_value",-"response") %>% as.matrix(),
-                              label = errors)
+                              label = errors^2)
     
     # Fit a model on error (using default params)
     error_model <- xgboost(data = error_data, 
@@ -334,7 +334,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                            gpu_id = gpu_id,
                            verbose = 0) 
     
-    cat(glue::glue(" E = +/- {round(1.96*sqrt(mean(errors,na.rm=T)),3)}"), sep = "\n")
+    cat(glue::glue(" E = +/- {round(1.96*sqrt(mean(errors^2,na.rm=T)),3)}"), sep = "\n")
     flush.console()
     
     # Get feature contributions                                                                          
