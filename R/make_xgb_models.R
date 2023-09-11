@@ -472,6 +472,10 @@ fit_models_and_save <- function(perturbs, chunk_indx,
     
     saveRDS(my_models,glue::glue("{path}/models_chunk_{chunk_indx}.rds"))
     
+    # Clean up
+    rm(my_models)
+    gc()
+    
     return(glue::glue("Done chunk {chunk_indx}"))
     
   } else {
