@@ -353,6 +353,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     output$sample_names <- rownames(model_data$original_data)
     output$feature_names <- setdiff(colnames(model_data$original_data),c("y_value","response"))
     
+    # Clean up
+    rm(last_model)
+    rm(error_model)
+    gc()
+    
     # output$data <- model_data$original_data
     
   } else {
