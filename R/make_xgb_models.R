@@ -262,6 +262,12 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
     
+    # Clean up
+    rm(score_models)
+    rm(data_splits)
+    rm(training_matrices)
+    rm(validation_matrices)
+    
     
   } else {
     
@@ -356,6 +362,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     # Clean up
     rm(last_model)
     rm(error_model)
+    rm(last_matrix)
+    rm(shap)
     gc()
     
     # output$data <- model_data$original_data
