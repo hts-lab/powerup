@@ -73,6 +73,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     params$lambda <- 0.7
     params$max_depth = 3
     params$subsample = 1
+    params$sampling_method = "gradient_based"
     params$colsample_bytree = 1
     params$colsample_bylevel = 0.2 # 0.2
     params$colsample_bynode = 0.8 # 0.8
@@ -332,7 +333,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                               label = errors^2)
     
     # Fit a model on error (using default params)
-    error_model <- xgboost(data = error_data, 
+    error_model <- xgboost(data = error_data, params = last_params,
                            nrounds = last_nrounds, early_stopping_rounds = 10, 
                            max_bin = 64,
                            nthread = n_threads,
