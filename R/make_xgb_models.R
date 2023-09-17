@@ -24,6 +24,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             nfolds = 3, 
                             nrepeats = 3, 
                             nrounds = 100, 
+                            f_subsample = 1,
                             min_score = 0.5, 
                             skip_eval = FALSE,
                             shuffle = FALSE,
@@ -72,7 +73,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     params$alpha <- 0.35
     params$lambda <- 0.7
     params$max_depth = 3
-    params$subsample = 1
+    # params$subsample = 1
     params$sampling_method = "gradient_based"
     params$colsample_bytree = 1
     params$colsample_bylevel = 0.2 # 0.2
@@ -249,6 +250,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     # Use the analysis subsets for creating a model, then use the assessment subset to make predictions and calculate correlation
     score_models <- map(training_matrices, xgboost, 
                         params = model_params,
+                        subsample = f_subsample,
                         nthread = n_threads,
                         max_bin = 64,
                         tree_method = if_else(use_gpu,"gpu_hist","auto"),
@@ -311,6 +313,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     # We fit a last model
     last_model <- xgboost(data = last_matrix, 
                           params = last_params, 
+                          subsample = f_subsample,
                           nthread = n_threads,
                           max_bin = 64,
                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
@@ -334,6 +337,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     # Fit a model on error (using default params)
     error_model <- xgboost(data = error_data, params = last_params,
+                           subsample = f_subsample,
                            nrounds = last_nrounds, early_stopping_rounds = 10, 
                            max_bin = 64,
                            nthread = n_threads,
@@ -407,6 +411,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               response_cutoff = 0.5,
                               weight_cap = 0,
                               nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                              f_subsample = 1,
                               skip_eval = FALSE, shuffle = FALSE,
                               n_threads = 4,
                               use_gpu = TRUE, gpu_id = 0){
@@ -417,6 +422,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     dataset = depmap_data,
     response_cutoff = response_cutoff, weight_cap = weight_cap,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+    f_subsample = f_subsample,
     skip_eval = skip_eval, shuffle = shuffle, n_threads = n_threads, use_gpu = use_gpu, gpu_id = gpu_id)
   
   names(my_models) <- models_to_make
@@ -453,6 +459,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 model_dataset, response_cutoff = 0.5,
                                 weight_cap = 0,
                                 nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                f_subsample = 1,
                                 skip_eval = FALSE, shuffle = FALSE,
                                 n_threads = 4,
                                 use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
@@ -477,7 +484,9 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                    models_to_make = perturbs, 
                                    response_cutoff = response_cutoff,
                                    weight_cap = weight_cap,
-                                   nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+                                   nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds,
+                                   min_score = min_score,
+                                   f_subsample = f_subsample,
                                    skip_eval = skip_eval, shuffle = shuffle,
                                    n_threads = n_threads,
                                    use_gpu = use_gpu, gpu_id = gpu_id)
@@ -531,6 +540,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                                    model_dataset, response_cutoff = 0.5,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                   f_subsample = 1,
                                    skip_eval = FALSE, shuffle = FALSE, 
                                    n_threads = 4,
                                    use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
@@ -546,7 +556,9 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
   furrr::future_pmap(inputs,fit_models_and_save,
                      model_dataset = model_dataset, response_cutoff = response_cutoff,
                      weight_cap = weight_cap,
-                     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
+                     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, 
+                     min_score = min_score,
+                     f_subsample = f_subsample,
                      skip_eval = skip_eval, shuffle = shuffle,
                      n_threads = n_threads,
                      use_gpu = use_gpu, seed = seed, path = path)
