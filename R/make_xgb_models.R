@@ -333,7 +333,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     # Fit a model on error (using default params)
     error_model <- xgboost(data = error_data, 
-                           nrounds = 100, early_stopping_rounds = 10, 
+                           nrounds = last_nrounds, early_stopping_rounds = 10, 
                            max_bin = 64,
                            nthread = n_threads,
                            tree_method = if_else(use_gpu,"gpu_hist","auto"),
