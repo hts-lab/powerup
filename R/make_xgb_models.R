@@ -65,7 +65,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     params <- list()
     params$booster <- "gbtree"
-    params$objective <- "reg:squarederror"
+    params$objective <- "reg:gamma" # squarederror
     
     
     # These parameters seem to do OK on average for all perturbations
