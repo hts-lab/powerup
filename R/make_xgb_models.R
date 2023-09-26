@@ -303,9 +303,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     if (weight_cap > 0){
       #   last_matrix <-  get_weighted_set(model_data$original_data, last_weights) %>% get_DMatrix()
-      last_matrix <-  get_DMatrix(model_data$original_data, last_weights)
+      last_matrix <-  get_DMatrix(model_data$original_data, last_weights, shuffle = shuffle)
     } else {   
-      last_matrix <- get_DMatrix(model_data$original_data)
+      last_matrix <- get_DMatrix(model_data$original_data, shuffle = shuffle)
     }
     
     
