@@ -571,7 +571,8 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                      f_subsample = f_subsample,
                      skip_eval = skip_eval, shuffle = shuffle,
                      n_threads = n_threads,
-                     use_gpu = use_gpu, seed = seed, path = path)
+                     use_gpu = use_gpu, seed = seed, path = path,  
+                     .options = furrr_options(seed = TRUE))
   
   return("Done")
   
