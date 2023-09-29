@@ -13,8 +13,9 @@ helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e",
 
   # Use alternative names of provided as labels_data
   if (!is.null(labels_data)){
-    name <- labels_data %>% filter(old_label == name) %>% pull(new_label) %>% first()
-    if (!is.null(sec_label)) second_label = labels_data  %>% filter(old_label == name) %>% pull(second_label) %>% first()
+    old_name <- name
+    name <- labels_data %>% filter(old_label == old_name) %>% pull(new_label) %>% first()
+    if (!is.null(sec_label)) second_label = labels_data  %>% filter(old_label == old_name) %>% pull(second_label) %>% first()
   } else {
     name <- word(name,2,sep="_")
     second_label <- NULL
