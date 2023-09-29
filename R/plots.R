@@ -181,7 +181,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                                         replace_names = FALSE,  sample_info = NULL,
                                         show_error = TRUE, 
                                         highlight_significant = FALSE,
-                                        plot_new_data = FALSE){
+                                        plot_new_data = FALSE, labels_data = NULL, sec_label = NULL){
   
   # This will hold the final list of plots
   p_list <- list()
@@ -246,7 +246,17 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     
     
     
-    clean_perturb_name = str_to_upper(word(name, 2, sep="_"))
+    # Use alternative names of provided as labels_data
+    if (!is.null(labels_data)){
+      old_name <- name
+      name <- labels_data %>% filter(old_label == old_name) %>% pull(new_label) %>% first()
+      if (!is.null(sec_label)) second_label = labels_data  %>% filter(old_label == old_name) %>% pull(second_label) %>% first()
+    } else {
+      name <- word(name,2,sep="_")
+      second_label <- NULL
+    }
+    
+    clean_perturb_name = str_to_upper(name)
     
     if(replace_names & !plot_new_data) sample_name <- get_cell_line_name(sample_name, sample_info)
     
@@ -268,6 +278,9 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     
     plot_title = glue::glue("{sample_name} ({scales::percent(final_prediction,accuracy = 1)} probability of {clean_perturb_name} dependency)")
     
+    if(!is.null(sec_label)) plot_title = glue::glue("{sample_name} ({clean_perturb_name})")
+    
+    
     if(short_title)  plot_title = glue::glue("{sample_name} ({scales::percent(final_prediction,accuracy = 1)} {clean_perturb_name})")
     
     p <- p + geom_rect(aes(xmin = id - 0.45, xmax = id + 0.45, ymin = start, ymax = end))+
@@ -280,8 +293,8 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                 size = 3, hjust = 0.5)+
       scale_color_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
       scale_fill_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
-      labs(subtitle = plot_title,
-           x = NULL, y = "Feature Contribution")+
+      labs(title = plot_title, subtitle = second_label,
+           x = NULL, y = "Outcome")+
       theme_bw()+
       theme(text=element_text(size=14), legend.position="none")
     
@@ -323,7 +336,8 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
                                              samples_to_use = NULL, lineage_to_use = NULL, 
                                              n_features = 5, n_columns = 1, fixed_axis = TRUE, show_error = TRUE,
                                              highlight_significant = FALSE,
-                                             replace_names = FALSE, sample_info = NULL){
+                                             replace_names = FALSE, sample_info = NULL,
+                                             labels_data = NULL, sec_label = NULL){
   
   
   # Restrict the list of models to only those we wish to plot
@@ -343,7 +357,7 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
              n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
              replace_names = replace_names, sample_info = sample_info, 
              highlight_significant = highlight_significant,
-             show_error = show_error)
+             show_error = show_error, labels_data = labels_data, sec_label = sec_label)
   
   return(pl)
 }
@@ -373,7 +387,8 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
 plot_contribution_to_new_samples <- function(models, models_to_use, model_data, 
                                              new_samples_to_use = NULL,
                                              n_features = 5, n_columns = 4, fixed_axis = TRUE, show_error = TRUE,
-                                             highlight_significant = TRUE, short_title = TRUE, sample_info = NULL){
+                                             highlight_significant = TRUE, short_title = TRUE,
+                                             sample_info = NULL, labels_data = NULL, sec_label = NULL){
   
   # Restrict the list of models to only those we wish to plot
   demo_models <- models[models_to_use]
@@ -396,7 +411,8 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
              n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
              replace_names = FALSE, sample_info = sample_info, 
              highlight_significant = highlight_significant, short_title = short_title,
-             show_error = show_error, plot_new_data = TRUE) 
+             show_error = show_error, 
+             labels_data = labels_data, sec_label = sec_label, plot_new_data = TRUE) 
   
   return(pl)
   
