@@ -246,6 +246,9 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       mutate(term_direction = if_else(shap_value > 0, "positive", "negative")) %>%
       mutate(shap_label = scales::percent(shap_value,accuracy=0.01))
     
+    # Revert the percentage label
+    if (!values_are_percentages)  term_values <- term_values %>% mutate(shap_label = as.character(round(shap_value,2)))
+
     
     # Use alternative names of provided as labels_data
     if (!is.null(labels_data)){
