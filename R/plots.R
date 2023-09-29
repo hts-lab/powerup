@@ -263,7 +263,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     
     clean_perturb_name = str_to_upper(new_name)
     
-    if(replace_names & !plot_new_data) sample_name <- get_cell_line_name(sample_name, sample_info)
+    if(replace_names) sample_name <- get_cell_line_name(sample_name, sample_info)
     
     # Make the plot    
     p <- ggplot(term_values, aes(x = term_label, fill = term_direction)) + 
@@ -410,7 +410,7 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
                                              new_samples_to_use = NULL,
                                              n_features = 5, n_columns = 4, 
                                              fixed_axis = TRUE, axis_limits = c(-0.05,1),
-                                             nudges_lr = c(0,0),
+                                             nudges_lr = c(0,0), replace_names = FALSE,
                                              show_error = TRUE, values_are_percentages = TRUE, decreasing = FALSE,
                                              highlight_significant = TRUE, short_title = TRUE,
                                              sample_info = NULL, labels_data = NULL, sec_label = NULL){
@@ -435,7 +435,7 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
              n_features = n_features, n_columns = n_columns, 
              fixed_axis = fixed_axis, axis_limits = axis_limits, nudges_lr = nudges_lr,
-             replace_names = FALSE, sample_info = sample_info, 
+             replace_names = replace_names, sample_info = sample_info, 
              highlight_significant = highlight_significant, short_title = short_title,
              show_error = show_error, values_are_percentages = values_are_percentages, decreasing = decreasing,
              labels_data = labels_data, sec_label = sec_label, plot_new_data = TRUE) 
