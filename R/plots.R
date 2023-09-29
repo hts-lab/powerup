@@ -249,14 +249,14 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     # Use alternative names of provided as labels_data
     if (!is.null(labels_data)){
       old_name <- name
-      name <- labels_data %>% filter(old_label == old_name) %>% pull(new_label) %>% first()
+      new_name <- labels_data %>% filter(old_label == old_name) %>% pull(new_label) %>% first()
       if (!is.null(sec_label)) second_label = labels_data  %>% filter(old_label == old_name) %>% pull(second_label) %>% first()
     } else {
-      name <- word(name,2,sep="_")
+      new_name <- word(name,2,sep="_")
       second_label <- NULL
     }
     
-    clean_perturb_name = str_to_upper(name)
+    clean_perturb_name = str_to_upper(new_name)
     
     if(replace_names & !plot_new_data) sample_name <- get_cell_line_name(sample_name, sample_info)
     
