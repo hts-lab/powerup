@@ -30,6 +30,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             skip_eval = FALSE,
                             shuffle = FALSE,
                             n_threads = 4,
+                            xgb_params = NULL,
                             use_gpu = TRUE, gpu_id = 0){
   
   cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
@@ -61,7 +62,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   
   # This creates an object that stores model parameters
   # Ideally this is tuning the parameters but we skip this for now
-  prepare_model_params <- function(data){
+  prepare_model_params <- function(data, xgb_params){
     
     params <- list()
     params$booster <- "gbtree"
@@ -80,6 +81,14 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     params$colsample_bylevel = 0.2 # 0.2
     params$colsample_bynode = 0.8 # 0.8
     
+    # If user provided other params, overwrite the baseline
+    if (is.null(xgb_params$eta)) params$eta <- 0.04 else params$eta <- xgb_params$eta
+    if (is.null(xgb_params$gamma)) params$gamma <- 0 else params$gamma <- xgb_params$gamma
+    if (is.null(xgb_params$alpha)) params$alpha <- 0.35 else params$alpha <- xgb_params$alpha
+    if (is.null(xgb_params$lambda)) params$lambda <- 0.7 else params$lambda <- xgb_params$lambda
+    if (is.null(xgb_params$colsample_bytree)) params$colsample_bytree <- 1 else params$colsample_bytree <- xgb_params$colsample_bytree
+    if (is.null(xgb_params$colsample_bylevel)) params$colsample_bylevel <- 0.2 else params$colsample_bylevel <- xgb_params$colsample_bylevel
+    if (is.null(xgb_params$colsample_bynode)) params$colsample_bynode <- 0.8 else params$colsample_bynode <- xgb_params$colsample_bynode
     
     return(params)
     
@@ -215,7 +224,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                                    nfolds = nfolds, nrepeats = nrepeats)
   
   # Step 2: Define parameters
-  model_params <- prepare_model_params(data = model_data)
+  model_params <- prepare_model_params(data = model_data, xgb_params = xgb_params)
   
   # Step 3: Assess current parameters with repeated k-fold CV
   # Ideally we are tuning hyperparameters here
@@ -419,6 +428,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               f_subsample = 1,
                               skip_eval = FALSE, shuffle = FALSE,
                               n_threads = 4,
+                              xgb_params = NULL,
                               use_gpu = TRUE, gpu_id = 0){
   
   my_models <- map2(
@@ -429,7 +439,10 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
     max_depth = max_depth,
     f_subsample = f_subsample,
-    skip_eval = skip_eval, shuffle = shuffle, n_threads = n_threads, use_gpu = use_gpu, gpu_id = gpu_id)
+    skip_eval = skip_eval, shuffle = shuffle, 
+    xgb_params = xgb_params,
+    n_threads = n_threads, 
+    use_gpu = use_gpu, gpu_id = gpu_id)
   
   names(my_models) <- models_to_make
   
@@ -468,6 +481,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 max_depth = 3,
                                 f_subsample = 1,
                                 skip_eval = FALSE, shuffle = FALSE,
+                                xgb_params = NULL,
                                 n_threads = 4,
                                 use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
   
@@ -496,6 +510,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                    max_depth = max_depth,
                                    f_subsample = f_subsample,
                                    skip_eval = skip_eval, shuffle = shuffle,
+                                   xgb_params = xgb_params,
                                    n_threads = n_threads,
                                    use_gpu = use_gpu, gpu_id = gpu_id)
     
@@ -551,6 +566,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                                    max_depth = 3,
                                    f_subsample = 1,
                                    skip_eval = FALSE, shuffle = FALSE, 
+                                   xgb_params = NULL,
                                    n_threads = 4,
                                    use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
 
@@ -570,6 +586,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                      max_depth = max_depth,
                      f_subsample = f_subsample,
                      skip_eval = skip_eval, shuffle = shuffle,
+                     xgb_params = xgb_params,
                      n_threads = n_threads,
                      use_gpu = use_gpu, seed = seed, path = path,  
                      .options = furrr_options(seed = TRUE))
