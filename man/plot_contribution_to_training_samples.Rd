@@ -14,6 +14,7 @@ plot_contribution_to_training_samples(
   n_columns = 1,
   fixed_axis = TRUE,
   axis_limits = c(-0.05, 1),
+  nudges_lr = c(0, 0),
   show_error = TRUE,
   highlight_significant = FALSE,
   replace_names = FALSE,

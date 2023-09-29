@@ -14,6 +14,7 @@ plot_contribution_to_sample(
   short_title = FALSE,
   fixed_axis = FALSE,
   axis_limits = c(-0.05, 1),
+  nudges_lr = c(0, 0),
   values_are_percentages = TRUE,
   decreasing = FALSE,
   replace_names = FALSE,

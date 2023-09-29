@@ -13,6 +13,7 @@ plot_contribution_to_new_samples(
   n_columns = 4,
   fixed_axis = TRUE,
   axis_limits = c(-0.05, 1),
+  nudges_lr = c(0, 0),
   show_error = TRUE,
   values_are_percentages = TRUE,
   decreasing = FALSE,
