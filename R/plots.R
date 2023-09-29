@@ -244,8 +244,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       mutate(term_label = if_else(!is.na(feature_value),glue::glue("{str_to_upper(term)} = {feature_value}"),str_to_upper(term))) %>%
       mutate(term_label = factor(term_label, levels=term_label)) %>%
       mutate(term_direction = if_else(shap_value > 0, "positive", "negative")) %>%
-      mutate(shap_label = if_else(values_are_percentages, scales::percent(shap_value,accuracy=0.01), as.character(round(shap_value, digits = 2))))
-    
+      mutate(shap_label = scales::percent(shap_value,accuracy=0.01))
     
     
     # Use alternative names of provided as labels_data
