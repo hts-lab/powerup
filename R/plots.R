@@ -47,7 +47,7 @@ plot_top_contributors <- function(models,
                                   data_to_use = "training", 
                                   n_predictors = 10, n_columns = 5, 
                                   color = "#52565e",
-                                  labels_data = NULL){
+                                  labels_data = NULL, sec_label = NULL){
   
   # Restrict the plot to the top 10 most variable predictions across our clusters
   models_of_interest <- models
@@ -61,7 +61,7 @@ plot_top_contributors <- function(models,
     shap_tables <- map(models_of_interest, "new_data") %>% map("feature_contribution")
   }
 
-  p <- plot_grid(plotlist = imap(shap_tables, helper_plot_top_contributors, n = n_predictors, color = color, labels_data = labels_data), align='v', ncol=n_columns)
+  p <- plot_grid(plotlist = imap(shap_tables, helper_plot_top_contributors, n = n_predictors, color = color, labels_data = labels_data, sec_label = sec_label), align='v', ncol=n_columns)
 
   return(p)
   
