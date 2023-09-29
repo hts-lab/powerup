@@ -5,7 +5,7 @@
 #' @import ggplot2 cowplot purrr
 #' @examples
 #' plot_top_contributors(shap_table, name, 10)
-helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e",labels_data = NULL){
+helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e",labels_data = NULL, sec_label = NULL){
   
   shap_table <- shap_table %>% top_n(n, wt=value)
   shap_table$term <- factor(str_to_upper(shap_table$term), levels = rev(str_to_upper(shap_table$term)))
@@ -14,12 +14,14 @@ helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e",
   # Use alternative names of provided as labels_data
   if (!is.null(labels_data)){
     name <- labels_data %>% filter(old_label == name) %>% pull(new_label) %>% first()
+    if (!is.null(sec_label)) second_label = labels_data  %>% filter(old_label == name) %>% pull(second_label) %>% first()
   } else {
     name <- word(name,2,sep="_")
+    second_label <- NULL
   }
   
   p <- ggplot(shap_table, aes(x=term,y=value))+geom_bar(stat="identity", fill = color)+coord_flip()+
-    labs(x="Feature",y="Contribution",subtitle=str_to_upper(name))+
+    labs(x="Feature",y="Contribution",title=str_to_upper(name),subtitle=second_label)+
     scale_x_discrete(labels = shap_table$labels)
   
   return(p)
