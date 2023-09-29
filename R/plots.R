@@ -178,7 +178,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                                         n_columns = 1,
                                         short_title = FALSE,
                                         fixed_axis = FALSE, axis_limits = c(-0.05,1),
-                                        values_are_percentages = TRUE,
+                                        values_are_percentages = TRUE, decreasing = FALSE,
                                         replace_names = FALSE,  sample_info = NULL,
                                         show_error = TRUE, 
                                         highlight_significant = FALSE,
@@ -244,7 +244,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       mutate(term_label = if_else(!is.na(feature_value),glue::glue("{str_to_upper(term)} = {feature_value}"),str_to_upper(term))) %>%
       mutate(term_label = factor(term_label, levels=term_label)) %>%
       mutate(term_direction = if_else(shap_value > 0, "positive", "negative")) %>%
-      mutate(shap_label = if_else(values_are_percentages, scales::percent(shap_value,accuracy=0.01), round(shap_value, digits = 2)))
+      mutate(shap_label = if_else(values_are_percentages, scales::percent(shap_value,accuracy=0.01), as.character(round(shap_value, digits = 2))))
     
     
     
@@ -285,6 +285,15 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
     
     if(short_title)  plot_title = glue::glue("{sample_name} ({scales::percent(final_prediction,accuracy = 1)} {clean_perturb_name})")
     
+    # Reverse colors if decreasing scale
+    if (!decreasing){
+      negative_color = "#3591d1"
+      positive_color = "#f04546"
+    } else {
+      negative_color = "#f04546"
+      positive_color = "#3591d1"
+    }
+    
     p <- p + geom_rect(aes(xmin = id - 0.45, xmax = id + 0.45, ymin = start, ymax = end))+
       geom_segment(aes(x = id, xend = id, y = start, yend = end), lineend = "round", linejoin ="round", size = 0.7, arrow = arrow(angle = 30, length = unit(0.5, "cm")), color = "white")+
       geom_text(aes(x = id,
@@ -293,8 +302,8 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                     label = if_else(shap_value > 0, paste0("+",shap_label),shap_label)), 
                 nudge_y = if_else(term_values$shap_value > 0, 0.04, -0.04),
                 size = 3, hjust = 0.5)+
-      scale_color_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
-      scale_fill_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
+      scale_color_manual(values = c("negative" = negative_color, "positive" = positive_color))+
+      scale_fill_manual(values = c("negative" = negative_color, "positive" = positive_color))+
       labs(title = plot_title, subtitle = second_label,
            x = NULL, y = "Outcome")+
       theme_bw()+
@@ -341,7 +350,7 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
                                              highlight_significant = FALSE,
                                              replace_names = FALSE, sample_info = NULL,
                                              labels_data = NULL, sec_label = NULL,
-                                             values_are_percentages = TRUE){
+                                             values_are_percentages = TRUE, decreasing = FALSE){
   
   
   # Restrict the list of models to only those we wish to plot
@@ -359,7 +368,7 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
   # Iterate through each input and add the plot to the list
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
              n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
-             values_are_percentages = values_are_percentages,
+             values_are_percentages = values_are_percentages, decreasing = decreasing,
              replace_names = replace_names, sample_info = sample_info, 
              highlight_significant = highlight_significant,
              show_error = show_error, labels_data = labels_data, sec_label = sec_label)
@@ -392,7 +401,7 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
 plot_contribution_to_new_samples <- function(models, models_to_use, model_data, 
                                              new_samples_to_use = NULL,
                                              n_features = 5, n_columns = 4, fixed_axis = TRUE, axis_limits = c(-0.05,1),
-                                             show_error = TRUE, values_are_percentages = TRUE,
+                                             show_error = TRUE, values_are_percentages = TRUE, decreasing = FALSE,
                                              highlight_significant = TRUE, short_title = TRUE,
                                              sample_info = NULL, labels_data = NULL, sec_label = NULL){
   
@@ -417,7 +426,7 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
              n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
              replace_names = FALSE, sample_info = sample_info, 
              highlight_significant = highlight_significant, short_title = short_title,
-             show_error = show_error, values_are_percentages = values_are_percentages,
+             show_error = show_error, values_are_percentages = values_are_percentages, decreasing = decreasing,
              labels_data = labels_data, sec_label = sec_label, plot_new_data = TRUE) 
   
   return(pl)
