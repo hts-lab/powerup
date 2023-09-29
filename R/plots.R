@@ -177,7 +177,8 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                                         n_features = 5, 
                                         n_columns = 1,
                                         short_title = FALSE,
-                                        fixed_axis = FALSE, 
+                                        fixed_axis = FALSE, axis_limits = c(-0.05,1),
+                                        values_are_percentages = TRUE,
                                         replace_names = FALSE,  sample_info = NULL,
                                         show_error = TRUE, 
                                         highlight_significant = FALSE,
@@ -242,7 +243,8 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       mutate(term = factor(term, levels=term)) %>% mutate(id = seq_along(term)) %>%
       mutate(term_label = if_else(!is.na(feature_value),glue::glue("{str_to_upper(term)} = {feature_value}"),str_to_upper(term))) %>%
       mutate(term_label = factor(term_label, levels=term_label)) %>%
-      mutate(term_direction = if_else(shap_value > 0, "positive", "negative"))
+      mutate(term_direction = if_else(shap_value > 0, "positive", "negative")) %>%
+      mutate(shap_label = if_else(values_are_percentages, scales::percent(shap_value,accuracy=0.01), round(shap_value, digits = 2)))
     
     
     
@@ -288,7 +290,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       geom_text(aes(x = id,
                     y = end, 
                     color = if_else(shap_value > 0, "positive","negative"), 
-                    label = if_else(shap_value > 0, paste0("+",scales::percent(shap_value,accuracy=0.01)),scales::percent(shap_value,accuracy=0.01))), 
+                    label = if_else(shap_value > 0, paste0("+",shap_label),shap_label)), 
                 nudge_y = if_else(term_values$shap_value > 0, 0.04, -0.04),
                 size = 3, hjust = 0.5)+
       scale_color_manual(values = c("negative" = "#3591d1", "positive" = "#f04546"))+
@@ -299,7 +301,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       theme(text=element_text(size=14), legend.position="none")
     
     if (!fixed_axis) p <- p+coord_flip(ylim = c(min(c(term_values$start, term_values$end))-0.05,0.05+max(c(term_values$start, term_values$end))))
-    else p <- p+coord_flip(ylim = c(-0.05,1))+scale_y_continuous(labels = scales::percent)
+    else p <- p+coord_flip(ylim = axis_limits)+scale_y_continuous(labels = ifelse(values_are_percentages, scales::percent, waiver()))
     
     if (highlight_significant && error_lower >= 0.5) p <- p +  theme(panel.border = element_rect(color = "red", fill = NA, size = 1))
     
@@ -334,10 +336,12 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 #' plot_contribution_to_training_sample(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, lineage_to_use = "soft_tissue")
 plot_contribution_to_training_samples <- function(models, models_to_use, model_data, 
                                              samples_to_use = NULL, lineage_to_use = NULL, 
-                                             n_features = 5, n_columns = 1, fixed_axis = TRUE, show_error = TRUE,
+                                             n_features = 5, n_columns = 1, fixed_axis = TRUE, axis_limits = c(-0.05,1), 
+                                             show_error = TRUE,
                                              highlight_significant = FALSE,
                                              replace_names = FALSE, sample_info = NULL,
-                                             labels_data = NULL, sec_label = NULL){
+                                             labels_data = NULL, sec_label = NULL,
+                                             values_are_percentages = TRUE){
   
   
   # Restrict the list of models to only those we wish to plot
@@ -354,7 +358,8 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
   
   # Iterate through each input and add the plot to the list
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
-             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
+             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
+             values_are_percentages = values_are_percentages,
              replace_names = replace_names, sample_info = sample_info, 
              highlight_significant = highlight_significant,
              show_error = show_error, labels_data = labels_data, sec_label = sec_label)
@@ -386,7 +391,8 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
 #' plot_contribution_to_sample_demo(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, "soft_tissue")
 plot_contribution_to_new_samples <- function(models, models_to_use, model_data, 
                                              new_samples_to_use = NULL,
-                                             n_features = 5, n_columns = 4, fixed_axis = TRUE, show_error = TRUE,
+                                             n_features = 5, n_columns = 4, fixed_axis = TRUE, axis_limits = c(-0.05,1),
+                                             show_error = TRUE, values_are_percentages = TRUE,
                                              highlight_significant = TRUE, short_title = TRUE,
                                              sample_info = NULL, labels_data = NULL, sec_label = NULL){
   
@@ -408,10 +414,10 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
   
   # Iterate through each input and add the plot to the list
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
-             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, 
+             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
              replace_names = FALSE, sample_info = sample_info, 
              highlight_significant = highlight_significant, short_title = short_title,
-             show_error = show_error, 
+             show_error = show_error, values_are_percentages = values_are_percentages,
              labels_data = labels_data, sec_label = sec_label, plot_new_data = TRUE) 
   
   return(pl)
