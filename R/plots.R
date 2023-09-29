@@ -5,13 +5,21 @@
 #' @import ggplot2 cowplot purrr
 #' @examples
 #' plot_top_contributors(shap_table, name, 10)
-helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e"){
+helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e",labels_data = NULL){
   
   shap_table <- shap_table %>% top_n(n, wt=value)
   shap_table$term <- factor(str_to_upper(shap_table$term), levels = rev(str_to_upper(shap_table$term)))
   shap_table$labels <- abbreviate(as.character(shap_table$term), minlength = 10, dot = T)
+
+  # Use alternative names of provided as labels_data
+  if (!is.null(labels_data)){
+    name <- labels_data %>% filter(old_label == name) %>% pull(new_label) %>% first()
+  } else {
+    name <- word(name,2,sep="_")
+  }
+  
   p <- ggplot(shap_table, aes(x=term,y=value))+geom_bar(stat="identity", fill = color)+coord_flip()+
-    labs(x="Feature",y="Contribution",subtitle=str_to_upper(word(name,2,sep="_")))+
+    labs(x="Feature",y="Contribution",subtitle=str_to_upper(name))+
     scale_x_discrete(labels = shap_table$labels)
   
   return(p)
@@ -32,7 +40,12 @@ helper_plot_top_contributors <- function(shap_table, name, n, color = "#52565e")
 #' @export
 #' @examples
 #' plot_top_contributors(shap_table, name, 10)
-plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "training", n_predictors = 10, n_columns = 5, color = "#52565e"){
+plot_top_contributors <- function(models,
+                                  models_to_use = NULL,
+                                  data_to_use = "training", 
+                                  n_predictors = 10, n_columns = 5, 
+                                  color = "#52565e",
+                                  labels_data = NULL){
   
   # Restrict the plot to the top 10 most variable predictions across our clusters
   models_of_interest <- models
@@ -46,7 +59,7 @@ plot_top_contributors <- function(models, models_to_use = NULL, data_to_use = "t
     shap_tables <- map(models_of_interest, "new_data") %>% map("feature_contribution")
   }
 
-  p <- plot_grid(plotlist = imap(shap_tables, helper_plot_top_contributors, n = n_predictors, color = color), align='v', ncol=n_columns)
+  p <- plot_grid(plotlist = imap(shap_tables, helper_plot_top_contributors, n = n_predictors, color = color, labels_data = labels_data), align='v', ncol=n_columns)
 
   return(p)
   
