@@ -178,6 +178,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                                         n_columns = 1,
                                         short_title = FALSE,
                                         fixed_axis = FALSE, axis_limits = c(-0.05,1),
+                                        nudges_lr = c(0,0),
                                         values_are_percentages = TRUE, decreasing = FALSE,
                                         replace_names = FALSE,  sample_info = NULL,
                                         show_error = TRUE, 
@@ -302,7 +303,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
                     y = end, 
                     color = if_else(shap_value > 0, "positive","negative"), 
                     label = if_else(shap_value > 0, paste0("+",shap_label),shap_label)), 
-                nudge_y = if_else(term_values$shap_value > 0, 0.04, -0.04),
+                nudge_y = if_else(term_values$shap_value > 0, 0.04 + nudges_lr[2], -0.04 + nudges_lr[1]),
                 size = 3, hjust = 0.5)+
       scale_color_manual(values = c("negative" = negative_color, "positive" = positive_color))+
       scale_fill_manual(values = c("negative" = negative_color, "positive" = positive_color))+
@@ -349,7 +350,9 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 #' plot_contribution_to_training_sample(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, lineage_to_use = "soft_tissue")
 plot_contribution_to_training_samples <- function(models, models_to_use, model_data, 
                                              samples_to_use = NULL, lineage_to_use = NULL, 
-                                             n_features = 5, n_columns = 1, fixed_axis = TRUE, axis_limits = c(-0.05,1), 
+                                             n_features = 5, n_columns = 1, 
+                                             fixed_axis = TRUE, axis_limits = c(-0.05,1), 
+                                             nudges_lr = c(0,0),
                                              show_error = TRUE,
                                              highlight_significant = FALSE,
                                              replace_names = FALSE, sample_info = NULL,
@@ -371,7 +374,8 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
   
   # Iterate through each input and add the plot to the list
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
-             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
+             n_features = n_features, n_columns = n_columns,
+             fixed_axis = fixed_axis, axis_limits = axis_limits, nudges_lr = nudges_lr,
              values_are_percentages = values_are_percentages, decreasing = decreasing,
              replace_names = replace_names, sample_info = sample_info, 
              highlight_significant = highlight_significant,
@@ -404,7 +408,9 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
 #' plot_contribution_to_sample_demo(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, "soft_tissue")
 plot_contribution_to_new_samples <- function(models, models_to_use, model_data, 
                                              new_samples_to_use = NULL,
-                                             n_features = 5, n_columns = 4, fixed_axis = TRUE, axis_limits = c(-0.05,1),
+                                             n_features = 5, n_columns = 4, 
+                                             fixed_axis = TRUE, axis_limits = c(-0.05,1),
+                                             nudges_lr = c(0,0),
                                              show_error = TRUE, values_are_percentages = TRUE, decreasing = FALSE,
                                              highlight_significant = TRUE, short_title = TRUE,
                                              sample_info = NULL, labels_data = NULL, sec_label = NULL){
@@ -427,7 +433,8 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
   
   # Iterate through each input and add the plot to the list
   pl <- pmap(inputs, plot_contribution_to_sample, model_data = model_data, 
-             n_features = n_features, n_columns = n_columns, fixed_axis = fixed_axis, axis_limits = axis_limits,
+             n_features = n_features, n_columns = n_columns, 
+             fixed_axis = fixed_axis, axis_limits = axis_limits, nudges_lr = nudges_lr,
              replace_names = FALSE, sample_info = sample_info, 
              highlight_significant = highlight_significant, short_title = short_title,
              show_error = show_error, values_are_percentages = values_are_percentages, decreasing = decreasing,
