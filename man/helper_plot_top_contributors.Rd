@@ -4,7 +4,14 @@
 \alias{helper_plot_top_contributors}
 \title{Plot top contributions (internal function)}
 \usage{
-helper_plot_top_contributors(shap_table, name, n, color = "#52565e")
+helper_plot_top_contributors(
+  shap_table,
+  name,
+  n,
+  color = "#52565e",
+  labels_data = NULL,
+  sec_label = NULL
+)
 }
 \description{
 This function generates a plot of the top contributing features for the top n models.

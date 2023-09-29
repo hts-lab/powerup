@@ -10,7 +10,9 @@ plot_top_contributors(
   data_to_use = "training",
   n_predictors = 10,
   n_columns = 5,
-  color = "#52565e"
+  color = "#52565e",
+  labels_data = NULL,
+  sec_label = NULL
 )
 }
 \arguments{

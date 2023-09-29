@@ -14,9 +14,13 @@ make_xgb_model(
   nfolds = 3,
   nrepeats = 3,
   nrounds = 100,
+  max_depth = 3,
+  f_subsample = 1,
   min_score = 0.5,
   skip_eval = FALSE,
   shuffle = FALSE,
+  n_threads = 4,
+  xgb_params = NULL,
   use_gpu = TRUE,
   gpu_id = 0
 )

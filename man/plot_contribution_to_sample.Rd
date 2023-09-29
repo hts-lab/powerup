@@ -13,11 +13,16 @@ plot_contribution_to_sample(
   n_columns = 1,
   short_title = FALSE,
   fixed_axis = FALSE,
+  axis_limits = c(-0.05, 1),
+  values_are_percentages = TRUE,
+  decreasing = FALSE,
   replace_names = FALSE,
   sample_info = NULL,
   show_error = TRUE,
   highlight_significant = FALSE,
-  plot_new_data = FALSE
+  plot_new_data = FALSE,
+  labels_data = NULL,
+  sec_label = NULL
 )
 }
 \arguments{

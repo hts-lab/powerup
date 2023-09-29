@@ -12,10 +12,15 @@ plot_contribution_to_new_samples(
   n_features = 5,
   n_columns = 4,
   fixed_axis = TRUE,
+  axis_limits = c(-0.05, 1),
   show_error = TRUE,
+  values_are_percentages = TRUE,
+  decreasing = FALSE,
   highlight_significant = TRUE,
   short_title = TRUE,
-  sample_info = NULL
+  sample_info = NULL,
+  labels_data = NULL,
+  sec_label = NULL
 )
 }
 \arguments{

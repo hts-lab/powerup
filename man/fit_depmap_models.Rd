@@ -13,8 +13,12 @@ fit_depmap_models(
   nrepeats = 1,
   nrounds = 200,
   min_score = 0.5,
+  max_depth = 3,
+  f_subsample = 1,
   skip_eval = FALSE,
   shuffle = FALSE,
+  n_threads = 4,
+  xgb_params = NULL,
   use_gpu = TRUE,
   gpu_id = 0
 )
