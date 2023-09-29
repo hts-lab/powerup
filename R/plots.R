@@ -309,7 +309,9 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
       theme(text=element_text(size=14), legend.position="none")
     
     if (!fixed_axis) p <- p+coord_flip(ylim = c(min(c(term_values$start, term_values$end))-0.05,0.05+max(c(term_values$start, term_values$end))))
-    else p <- p+coord_flip(ylim = axis_limits)+scale_y_continuous(labels = ifelse(values_are_percentages, scales::percent, waiver()))
+    else p <- p+coord_flip(ylim = axis_limits)
+    
+    if (values_are_percentages) p <- p + scale_y_continuous(labels = scales::percent)
     
     if (highlight_significant && error_lower >= 0.5) p <- p +  theme(panel.border = element_rect(color = "red", fill = NA, size = 1))
     
