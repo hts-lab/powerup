@@ -35,8 +35,41 @@ summarize_models <- function(models){
     as_tibble() %>%
     pivot_longer(everything(),names_to="brd",values_to="r.squared")
   
+  rmse_table <- map(models, "scores_rmse") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="rmse")
+  
+  
+  # Discrete scores
+  d_sensitivity_table <- map(models,"scores_d_sensitivity") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_sensitivity")
+  
+  d_specificity_table <- map(models,"scores_d_specificity") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_specificity")
+  
+  d_fpr_table <- map(models,"scores_d_fpr") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_FPR")
+  
+  d_accuracy <- map(models,"scores_d_accuracy") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_accuracy")
+  
+
+  # Merge all mini tables into one large scores table
   scores_table <- r_table %>%
     left_join(r_squared_table, by = "brd") %>%
+    left_join(d_sensitivity_table, by = "brd") %>%
+    left_join(d_specificity_table, by = "brd") %>%
+    left_join(d_fpr_table, by = "brd") %>%
+    left_join(d_accuracy, by = "brd") %>%
     left_join(n_term_table, by = "brd") %>%
     arrange(desc(r))  
   

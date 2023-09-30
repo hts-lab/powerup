@@ -50,12 +50,20 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       
     } else {
       
-      correlated_features <- cor_data %>%
-        top_n(cor_num, abs(get(perturbation))) %>%
-        pull(feature)
+      # Check if the perturbation is in the correlation matrix or skip
+      correlated_features <- NULL
+      
+      if (perturbation %in% colnames(cor_data)){
+        
+        correlated_features <- cor_data %>%
+          top_n(cor_num, abs(get(perturbation))) %>%
+          pull(feature)
+        
+      }
+
       
       # if no features then use all features
-      if (length(correlated_features) > 0) {
+      if (!is.null(correlated_features) & length(correlated_features) > 0) {
         
         prepared_data <- data %>%
           mutate(y_value = get(perturbation)) %>% 
@@ -250,6 +258,78 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
   
   
+  # Binarized scores
+  get_discrete_sensitivity <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+
+    
+    TP = sum(pred_d & obs_d)
+    FN = sum(!pred_d & obs_d)
+    
+    result = TP / (TP + FN)
+    return(result)
+    
+  }
+  get_discrete_specificity <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+    
+    TN = sum(!pred_d & !obs_d)
+    FP = sum(pred_d & !obs_d)
+    
+    result = TN / (TN + FP)
+    return(result)
+  }
+  get_discrete_fpr <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+    
+    FP = sum(pred_d & !obs_d)
+    TN = sum(!pred_d & !obs_d)
+    
+    result = FP / (FP + TN)
+    return(result)
+    
+  }
+  get_discrete_accuracy <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+    
+    TP = sum(pred_d & obs_d)
+    FP = sum(pred_d & !obs_d)
+    TN = sum(!pred_d & !obs_d)
+    FN = sum(!pred_d & obs_d)
+    
+    result = TP / (TP + FP + TN + FN)
+    return(result)
+  }
+  
+  
   # Step 1: Prepare the data (keep only this perturbation's outcome values and split into folds)
   model_data <- prepare_model_data(perturbation = perturbation, 
                                    data = dataset, 
@@ -310,6 +390,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
     
+    # Discrete scores
+    scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity) %>% unlist()
+    scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity) %>% unlist()
+    scores_d_fpr <- score_predictions %>% map2(validation_y_values, get_discrete_fpr) %>% unlist()
+    scores_d_accuracy <- score_predictions %>% map2(validation_y_values, get_discrete_accuracy) %>% unlist()
+    
+    
     # Clean up
     rm(score_models)
     rm(data_splits)
@@ -321,6 +408,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     scores <- rep(1,9)
     scores_rmse <- rep(0,9)
+    scores_d_sensitivity <- rep(1,9)
+    scores_d_specificity <- rep(1,9)
+    scores_d_fpr <- rep(1,9)
+    scores_d_accuracy <- rep(1,9)
     
   }        
   
@@ -334,6 +425,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output$perturbation_name <- perturbation
   output$scores <- scores
   output$scores_rmse <- scores_rmse
+  output$scores_d_sensitivity <- scores_d_sensitivity
+  output$scores_d_specificity <- scores_d_specificity
+  output$scores_d_fpr <- scores_d_fpr
+  output$scores_d_accuracy <- scores_d_accuracy
   
   # If the score is good enough, we proceed with extra steps                                                                              
   if (!is.na(mean(scores)) & mean(scores^2) >= min_score){
