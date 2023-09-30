@@ -57,7 +57,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       prepared_data <- data %>%
         mutate(y_value = get(perturbation)) %>% 
         select(-starts_with(tag)) %>%
-        select(y_value, any_of(correlated_features)) %>%
+        select(y_value, any_of(correlated_features))  %>%
         na.omit() %>% as_tibble(rownames = "cell_line") 
       
       
