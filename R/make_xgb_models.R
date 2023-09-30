@@ -19,7 +19,7 @@
 #' @examples
 #' make_xgb_model("ko_ctnnb1",1,1,my_data)
 make_xgb_model <- function(perturbation, indx, total, dataset, 
-                            response_cutoff = 0.75,
+                            response_cutoff = 0.75, decreasing = F,
                             weight_cap = 0.05,
                             nfolds = 3, 
                             nrepeats = 3, 
@@ -391,10 +391,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
     
     # Discrete scores
-    scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity) %>% unlist()
-    scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity) %>% unlist()
-    scores_d_fpr <- score_predictions %>% map2(validation_y_values, get_discrete_fpr) %>% unlist()
-    scores_d_accuracy <- score_predictions %>% map2(validation_y_values, get_discrete_accuracy) %>% unlist()
+    scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
+    scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
+    scores_d_fpr <- score_predictions %>% map2(validation_y_values, get_discrete_fpr, response_cutoff, decreasing) %>% unlist()
+    scores_d_accuracy <- score_predictions %>% map2(validation_y_values, get_discrete_accuracy, response_cutoff, decreasing) %>% unlist()
     
     
     # Clean up
@@ -550,7 +550,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 #' @examples
 #' fit_depmap_models(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_depmap_models <- function(depmap_data, models_to_make,
-                              response_cutoff = 0.5,
+                              response_cutoff = 0.5, decreasing = FALSE,
                               weight_cap = 0,
                               nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
                               max_depth = 3,
@@ -565,7 +565,8 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     models_to_make, seq_along(models_to_make), make_xgb_model,  
     total = length(models_to_make),
     dataset = depmap_data,
-    response_cutoff = response_cutoff, weight_cap = weight_cap,
+    response_cutoff = response_cutoff, decreasing = decreasing,
+    weight_cap = weight_cap,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
     max_depth = max_depth,
     f_subsample = f_subsample,
@@ -606,7 +607,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
 #' @examples
 #' fit_models_and_save(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_models_and_save <- function(perturbs, chunk_indx, 
-                                model_dataset, response_cutoff = 0.5,
+                                model_dataset, response_cutoff = 0.5, decreasing = FALSE,
                                 weight_cap = 0,
                                 nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
                                 max_depth = 3,
@@ -635,7 +636,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
     
     my_models <- fit_depmap_models(depmap_data = model_dataset, 
                                    models_to_make = perturbs, 
-                                   response_cutoff = response_cutoff,
+                                   response_cutoff = response_cutoff, decreasing = decreasing,
                                    weight_cap = weight_cap,
                                    nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds,
                                    min_score = min_score,
@@ -694,7 +695,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
 #' @examples
 #' fit_models_in_parallel(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_models_in_parallel <- function(perturbs, chunk_size = 20, 
-                                   model_dataset, response_cutoff = 0.5,
+                                   model_dataset, response_cutoff = 0.5, decreasing = FALSE,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
                                    max_depth = 3,
@@ -714,7 +715,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
   inputs$gpu_id <- rep(gpu_id,length.out=length(perturb_splits))
   
   furrr::future_pmap(inputs,fit_models_and_save,
-                     model_dataset = model_dataset, response_cutoff = response_cutoff,
+                     model_dataset = model_dataset, response_cutoff = response_cutoff, decreasing = decreasing,
                      weight_cap = weight_cap,
                      nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, 
                      min_score = min_score,
