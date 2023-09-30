@@ -51,8 +51,6 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     } else {
       
       correlated_features <- cor_data %>%
-        select(feature, get(perturbation)) %>%
-        drop_na() %>%
         top_n(cor_num, abs(get(perturbation))) %>%
         pull(feature)
       
