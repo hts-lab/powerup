@@ -51,14 +51,30 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     } else {
       
       correlated_features <- cor_data %>%
+        select(feature, get(perturbation)) %>%
+        drop_na() %>%
         top_n(cor_num, abs(get(perturbation))) %>%
         pull(feature)
       
-      prepared_data <- data %>%
-        mutate(y_value = get(perturbation)) %>% 
-        select(-starts_with(tag)) %>%
-        select(y_value, any_of(correlated_features))  %>%
-        na.omit() %>% as_tibble(rownames = "cell_line") 
+      # if no features then use all features
+      if (length(correlated_features) > 0) {
+        
+        prepared_data <- data %>%
+          mutate(y_value = get(perturbation)) %>% 
+          select(-starts_with(tag)) %>%
+          select(y_value, any_of(correlated_features))  %>%
+          na.omit() %>% as_tibble(rownames = "cell_line") 
+        
+      } else {
+        
+        prepared_data <- data %>%
+          mutate(y_value = get(perturbation)) %>% 
+          select(-starts_with(tag)) %>%
+          na.omit() %>% as_tibble(rownames = "cell_line") 
+        
+      }
+      
+
       
       
     }
