@@ -31,6 +31,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             shuffle = FALSE,
                             n_threads = 4,
                             xgb_params = NULL,
+                            cor_data = NULL, cor_n_features = 1000,
                             use_gpu = TRUE, gpu_id = 0){
   
   cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
@@ -38,12 +39,30 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   
   
   # This keeps one column of dependency scores (renamed 'y_value') plus all predictors
-  prepare_model_data <- function(perturbation, data, tag = "ko_", response_cutoff = 0.75, nfolds = 3, nrepeats = 3){
+  prepare_model_data <- function(perturbation, data, tag = "ko_", response_cutoff = 0.75, nfolds = 3, nrepeats = 3, cor_data = NULL, cor_num = 1000){
     
-    prepared_data <- data %>%
-      mutate(y_value = get(perturbation)) %>% 
-      select(-starts_with(tag)) %>%
-      na.omit() %>% as_tibble(rownames = "cell_line")  
+    if (is.null(cor_data)){
+      
+      prepared_data <- data %>%
+        mutate(y_value = get(perturbation)) %>% 
+        select(-starts_with(tag)) %>%
+        na.omit() %>% as_tibble(rownames = "cell_line") 
+      
+    } else {
+      
+      correlated_features <- cor_data %>%
+        top_n(cor_num, abs(get(perturbation))) %>%
+        pull(feature)
+      
+      prepared_data <- data %>%
+        mutate(y_value = get(perturbation)) %>% 
+        select(-starts_with(tag)) %>%
+        select(y_value, any_of(correlated_features)) %>%
+        na.omit() %>% as_tibble(rownames = "cell_line") 
+      
+      
+    }
+ 
     
     # Create a response column to help stratify cases
     prepared_data <- prepared_data %>% column_to_rownames("cell_line") %>% mutate(response = y_value > response_cutoff)
@@ -221,7 +240,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   model_data <- prepare_model_data(perturbation = perturbation, 
                                    data = dataset, 
                                    response_cutoff = response_cutoff, 
-                                   nfolds = nfolds, nrepeats = nrepeats)
+                                   nfolds = nfolds, nrepeats = nrepeats,
+                                   cor_data = cor_data, cor_num = cor_n_features)
   
   # Step 2: Define parameters
   model_params <- prepare_model_params(data = model_data, xgb_params = xgb_params)
@@ -429,6 +449,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               skip_eval = FALSE, shuffle = FALSE,
                               n_threads = 4,
                               xgb_params = NULL,
+                              cor_data = NULL, cor_n_features = 1000,
                               use_gpu = TRUE, gpu_id = 0){
   
   my_models <- map2(
@@ -442,6 +463,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     skip_eval = skip_eval, shuffle = shuffle, 
     xgb_params = xgb_params,
     n_threads = n_threads, 
+    cor_data = cor_data, cor_n_features = cor_n_features,
     use_gpu = use_gpu, gpu_id = gpu_id)
   
   names(my_models) <- models_to_make
@@ -483,6 +505,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 skip_eval = FALSE, shuffle = FALSE,
                                 xgb_params = NULL,
                                 n_threads = 4,
+                                cor_data = NULL, cor_n_features = 1000,
                                 use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
   
   library(tidyverse)
@@ -511,6 +534,8 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                    f_subsample = f_subsample,
                                    skip_eval = skip_eval, shuffle = shuffle,
                                    xgb_params = xgb_params,
+                                   cor_data = cor_data,
+                                   cor_n_features = cor_n_features,
                                    n_threads = n_threads,
                                    use_gpu = use_gpu, gpu_id = gpu_id)
     
@@ -567,6 +592,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                                    f_subsample = 1,
                                    skip_eval = FALSE, shuffle = FALSE, 
                                    xgb_params = NULL,
+                                   cor_data = NULL, cor_n_features = 1000,
                                    n_threads = 4,
                                    use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
 
@@ -587,6 +613,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
                      f_subsample = f_subsample,
                      skip_eval = skip_eval, shuffle = shuffle,
                      xgb_params = xgb_params,
+                     cor_data = cor_data, cor_n_features = cor_n_features,
                      n_threads = n_threads,
                      use_gpu = use_gpu, seed = seed, path = path,  
                      .options = furrr_options(seed = TRUE))
