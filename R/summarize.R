@@ -66,7 +66,7 @@ summarize_models <- function(models){
   # Merge all mini tables into one large scores table
   scores_table <- r_table %>%
     left_join(r_squared_table, by = "brd") %>%
-    left_join(rmse_table, bu = "brd") %>%
+    left_join(rmse_table, by = "brd") %>%
     left_join(d_sensitivity_table, by = "brd") %>%
     left_join(d_specificity_table, by = "brd") %>%
     left_join(d_fpr_table, by = "brd") %>%
