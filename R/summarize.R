@@ -35,6 +35,13 @@ summarize_models <- function(models){
     as_tibble() %>%
     pivot_longer(everything(),names_to="brd",values_to="r.squared")
   
+  
+  R2_table <- map(models,"scores_R2") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="R2")
+  
+  
   rmse_table <- map(models, "scores_rmse") %>%
     map(mean) %>% 
     as_tibble() %>%
@@ -66,6 +73,7 @@ summarize_models <- function(models){
   # Merge all mini tables into one large scores table
   scores_table <- r_table %>%
     left_join(r_squared_table, by = "brd") %>%
+    left_join(R2_table, by = "brd") %>%
     left_join(rmse_table, by = "brd") %>%
     left_join(d_sensitivity_table, by = "brd") %>%
     left_join(d_specificity_table, by = "brd") %>%

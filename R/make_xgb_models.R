@@ -258,6 +258,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
   
   
+  get_R2 <- function(x, y){
+    
+    return( 1 - sum( ( x - y )^2 )/sum( ( y - mean(y) )^2 ) )
+    
+  }
+  
+  
   # Binarized scores
   get_discrete_sensitivity <- function(pred, obs, discrete_cut, decreasing = F){
     
@@ -390,6 +397,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
     
+    scores_R2 <- score_predictions %>% map2(validation_y_values, get_R2) %>% unlist()
+    
+    
     # Discrete scores
     scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
     scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
@@ -407,6 +417,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   } else {
     
     scores <- rep(1,9)
+    scores_R2 <- rep(1,9)
     scores_rmse <- rep(0,9)
     scores_d_sensitivity <- rep(1,9)
     scores_d_specificity <- rep(1,9)
@@ -424,6 +435,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output <- list()  
   output$perturbation_name <- perturbation
   output$scores <- scores
+  output$scores_R2 <- scores_R2
   output$scores_rmse <- scores_rmse
   output$scores_d_sensitivity <- scores_d_sensitivity
   output$scores_d_specificity <- scores_d_specificity
