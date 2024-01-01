@@ -332,7 +332,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TN = sum(!pred_d & !obs_d)
     FN = sum(!pred_d & obs_d)
     
-    result = TP / (TP + FN)
+    result = TP / (TP + FP)
     return(result)
     
   }
