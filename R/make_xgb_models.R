@@ -317,6 +317,44 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     return(result)
     
   }
+  get_discrete_ppv <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+    
+    TP = sum(pred_d & obs_d)
+    FP = sum(pred_d & !obs_d)
+    TN = sum(!pred_d & !obs_d)
+    FN = sum(!pred_d & obs_d)
+    
+    result = TP / (TP + FN)
+    return(result)
+    
+  }
+  get_discrete_npv <- function(pred, obs, discrete_cut, decreasing = F){
+    
+    if (decreasing){
+      pred_d = if_else(pred <= discrete_cut, T, F)
+      obs_d = if_else(obs <= discrete_cut, T, F)
+    } else {
+      pred_d = if_else(pred >= discrete_cut, T, F)
+      obs_d = if_else(obs >= discrete_cut, T, F)
+    }
+    
+    TP = sum(pred_d & obs_d)
+    FP = sum(pred_d & !obs_d)
+    TN = sum(!pred_d & !obs_d)
+    FN = sum(!pred_d & obs_d)
+    
+    result = TN / (TN + FP)
+    return(result)
+    
+  }
   get_discrete_accuracy <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
@@ -404,6 +442,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
     scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
     scores_d_fpr <- score_predictions %>% map2(validation_y_values, get_discrete_fpr, response_cutoff, decreasing) %>% unlist()
+    scores_d_ppv <- score_predictions %>% map2(validation_y_values, get_discrete_ppv, response_cutoff, decreasing) %>% unlist()
+    scores_d_npv <- score_predictions %>% map2(validation_y_values, get_discrete_npv, response_cutoff, decreasing) %>% unlist()
     scores_d_accuracy <- score_predictions %>% map2(validation_y_values, get_discrete_accuracy, response_cutoff, decreasing) %>% unlist()
     
     
@@ -422,6 +462,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     scores_d_sensitivity <- rep(1,9)
     scores_d_specificity <- rep(1,9)
     scores_d_fpr <- rep(1,9)
+    scores_d_ppv <- rep(1,9)
+    scores_d_npv <- rep(1,9)
     scores_d_accuracy <- rep(1,9)
     
   }        
@@ -440,6 +482,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output$scores_d_sensitivity <- scores_d_sensitivity
   output$scores_d_specificity <- scores_d_specificity
   output$scores_d_fpr <- scores_d_fpr
+  output$scores_d_ppv <- scores_d_ppv
+  output$scores_d_npv <- scores_d_npv
   output$scores_d_accuracy <- scores_d_accuracy
   
   # If the score is good enough, we proceed with extra steps                                                                              

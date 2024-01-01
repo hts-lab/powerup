@@ -64,6 +64,16 @@ summarize_models <- function(models){
     as_tibble() %>%
     pivot_longer(everything(),names_to="brd",values_to="d_FPR")
   
+  d_ppv_table <- map(models,"scores_d_ppv") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_PPV")
+  
+  d_npv_table <- map(models,"scores_d_npv") %>%
+    map(mean) %>% 
+    as_tibble() %>%
+    pivot_longer(everything(),names_to="brd",values_to="d_NPV")
+  
   d_accuracy <- map(models,"scores_d_accuracy") %>%
     map(mean) %>% 
     as_tibble() %>%
@@ -78,6 +88,8 @@ summarize_models <- function(models){
     left_join(d_sensitivity_table, by = "brd") %>%
     left_join(d_specificity_table, by = "brd") %>%
     left_join(d_fpr_table, by = "brd") %>%
+    left_join(d_ppv_table, by = "brd") %>%
+    left_join(d_npv_table, by = "brd") %>%
     left_join(d_accuracy, by = "brd") %>%
     left_join(n_term_table, by = "brd") %>%
     arrange(desc(r))  
