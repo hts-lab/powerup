@@ -12,6 +12,27 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     license
 Encoding: UTF-8
 LazyData: true
-Imports: glue
+Imports: 
+    Seurat,
+    cowplot,
+    data.table,
+    dplyr,
+    edgeR,
+    fastshap,
+    furrr,
+    future,
+    ggplot2,
+    glue,
+    lubridate,
+    purrr,
+    readr,
+    rsample,
+    stringr,
+    tidymodels,
+    tidyr,
+    tidyverse,
+    xgboost
+Remotes: 
+    satijalab/seurat
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2.9000
