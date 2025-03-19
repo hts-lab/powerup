@@ -10,6 +10,7 @@ make_xgb_model(
   total,
   dataset,
   response_cutoff = 0.75,
+  decreasing = F,
   weight_cap = 0.05,
   nfolds = 3,
   nrepeats = 3,
@@ -21,6 +22,8 @@ make_xgb_model(
   shuffle = FALSE,
   n_threads = 4,
   xgb_params = NULL,
+  cor_data = NULL,
+  cor_n_features = 1000,
   use_gpu = TRUE,
   gpu_id = 0
 )

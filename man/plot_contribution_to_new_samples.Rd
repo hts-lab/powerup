@@ -14,6 +14,7 @@ plot_contribution_to_new_samples(
   fixed_axis = TRUE,
   axis_limits = c(-0.05, 1),
   nudges_lr = c(0, 0),
+  replace_names = FALSE,
   show_error = TRUE,
   values_are_percentages = TRUE,
   decreasing = FALSE,
@@ -37,13 +38,13 @@ plot_contribution_to_new_samples(
 
 \item{fixed_axis}{If TRUE, the plot will be set to a fixed scale (-0.05 to 1). Default = FALSE.}
 
+\item{replace_names}{If TRUE, the sample name will be replaced using get_cell_line_name. Must supply sample_info.}
+
 \item{show_error}{If TRUE, a shaded area will be used to visualize prediction interval. Default = TRUE.}
 
 \item{short_title}{If using many columns, set to TRUE to shorten the title of the plot.}
 
 \item{sample_info}{If replace_names is TRUE, this must be supplied.}
-
-\item{replace_names}{If TRUE, the sample name will be replaced using get_cell_line_name. Must supply sample_info.}
 }
 \description{
 This function plots the contribution (Shapley values) of the top features to a sample's predictions, using new samples.

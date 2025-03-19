@@ -8,6 +8,7 @@ fit_depmap_models(
   depmap_data,
   models_to_make,
   response_cutoff = 0.5,
+  decreasing = FALSE,
   weight_cap = 0,
   nfolds = 3,
   nrepeats = 1,
@@ -19,6 +20,8 @@ fit_depmap_models(
   shuffle = FALSE,
   n_threads = 4,
   xgb_params = NULL,
+  cor_data = NULL,
+  cor_n_features = 1000,
   use_gpu = TRUE,
   gpu_id = 0
 )
