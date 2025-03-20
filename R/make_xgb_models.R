@@ -787,3 +787,112 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
   return("Done")
   
 }
+
+
+
+
+
+
+#' Make a list of models and save as file (parallel)
+#'
+#' This function creates an XGBoost model for each perturbation given, saves the list of models, and returns a message.
+#' @param perturbs A vector of perturbations.
+#' @param chunk_indx Integer index used, for progress report.
+#' @param model_dataset A dataframe with the perturbation in a column and all other predictors. Sample names are row names.
+#' @param response_cutoff The value above which the sample is considered sensitive.
+#' @param weight_cap The maximum weight of each minority case when resampling. Set to 0 if no resampling needed.
+#' @param nfolds The number of folds in k-fold cross validation.
+#' @param nrepeats The number of repeats in k-fold cross validation.
+#' @param nrounds The maximum number of trees in the XGBoost model.
+#' @param min_score The minimum number of r^2 value for a model to be considered for the next stage (making predictions and calculating SHAP values).
+#' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
+#' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
+#' @param seed Random seed
+#' @param path Folder path (e.g. "/home/test/models") to save models in.
+#' @keywords model
+#' @import xgboost purrr furrr future fastshap tidyverse glue lubridate tidymodels rsample
+#' @export
+#' @examples
+#' fit_models(my_data, c("ko_ctnnb1","ko_myod1"))
+fit_models <- function(perturbs, model_dataset, splits = 10,
+                       chunk_size = 6, 
+                                   response_cutoff = 0.5, decreasing = FALSE,
+                                   weight_cap = 0,
+                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                   max_depth = 3,
+                                   f_subsample = 1,
+                                   skip_eval = FALSE, shuffle = FALSE, 
+                                   xgb_params = NULL,
+                                   cor_data = NULL, cor_n_features = 1000,
+                                   n_threads = 4,
+                                   use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
+  
+  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] We will start fitting models for {length(selected_perturbs)} perturbations.
+    Data will be stored at  {path}/results"))
+  
+  
+  big_chunks <- split(perturbs, 1:splits)
+
+  # Create folders to host chunk outputs
+  big_chunk_count = 0
+  for (this_big_chunk in big_chunks){
+    big_chunk_count = big_chunk_count + 1
+    system(glue::glue("mkdir -p {path}/results/big_chunk_{big_chunk_count}"))
+  }
+  
+  # Release memory
+  future::plan(sequential)
+  
+  
+  # Loop through chunks to train models in parallel
+  big_chunk_count = 0
+  for (this_big_chunk in big_chunks){
+    big_chunk_count = big_chunk_count + 1
+    show_msg("[{lubridate::now('US/Eastern')}] Processing {big_chunk_count} of {splits} - STARTED")
+    future::plan(multisession, workers = 8)
+    fit_models_in_parallel(perturbs = this_big_chunk, 
+                           chunk_size = chunk_size,
+                           min_score = min_score,
+                           max_depth = max_depth,
+                           model_dataset = model_dataset, 
+                           response_cutoff = response_cutoff,
+                           path = glue("{path}/results/big_chunk_{big_chunk_count}"),
+                           shuffle = shuffle,
+                           n_threads = n_threads,
+                           use_gpu = use_gpu, gpu_id = gpu_id)
+    future::plan(sequential)
+    show_msg("[{lubridate::now('US/Eastern')}] Processing {big_chunk_count} of {splits} - DONE")
+    
+  }
+  
+  
+  
+  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] Done fitting models in parallel. Merging outputs...
+    Data will be stored at  {path}/results"))
+  
+  
+  chunk_files <- list.files(glue("{path}/results"), pattern = "models_chunk_*",full.names = T,recursive =  T)
+  
+  all_chunks <- list()
+  
+  for(chunk_file in chunk_files){
+    
+    this_chunk <- readRDS(chunk_file)
+    
+    all_chunks <- append(all_chunks, this_chunk)
+    
+  }
+  
+  
+  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] Done fitting models in parallel. Saving...
+    Data will be stored at {path}/results/models.rds"))
+  
+  saveRDS(all_chunks,glue::glue("{path}/results/models.rds"))
+  
+  show_msg(glue("[{lubridate::now('US/Eastern')}] Done. The overall average model accuracy (r) was {all_chunks %>% map('scores') %>% map(mean) %>% unlist() %>% mean()}"))
+  
+  return("Done")
+  
+}
+
+
