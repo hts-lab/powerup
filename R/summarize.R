@@ -9,10 +9,10 @@
 #' summarize_models(my_models)
 summarize_models <- function(models){
   
-  n_term_table <- map(models,"important_features") %>%
+  n_term_table <- map(models, "important_features") %>%
     map(length) %>%
     as_tibble() %>%
-    pivot_longer(everything(),names_to="brd",values_to="n_terms")
+    pivot_longer(everything(), names_to="brd", values_to="n_terms")
   
   
   good_models = n_term_table %>% filter(n_terms > 0) %>% pull(brd)
@@ -21,7 +21,7 @@ summarize_models <- function(models){
       map(function(x) x^2) %>%
       map(mean, na.rm = T) %>% 
       as_tibble() %>%
-      pivot_longer(everything(),names_to="brd",values_to="error")
+      pivot_longer(everything(), names_to="brd", values_to="error")
   } 
   
   r_table <- map(models,"scores") %>%
