@@ -143,7 +143,10 @@ make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
 
     # Transpose
     bulk_expression <- bulk_expression %>% t()
+    
     show_msg("Done")
+    
+    # Display statistics
     show_msg("{c('Samples','Features')}: {dim(bulk_expression)}")
     
     return(bulk_expression)

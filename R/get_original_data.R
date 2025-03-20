@@ -11,6 +11,7 @@
 get_original_data <- function(model, data){
   
   returned_data <- data[model$sample_names,model$feature_names]
+  
   returned_data <- returned_data %>% mutate(y_value = data[model$sample_names,model$perturbation])
   
   return(returned_data)

@@ -19,6 +19,7 @@ append_predictions_to_seurat <- function(scrna_folder, scrna_name, predictions_t
                                          scrna_group_cells_by = "seurat_clusters"){
   
   show_msg("Loading {scrna_name} ..")
+  
   scrna_data <- readRDS(glue::glue("{scrna_folder}/{scrna_name}.rds"))
   
   show_msg("Appending predictions ..")
@@ -29,6 +30,7 @@ append_predictions_to_seurat <- function(scrna_folder, scrna_name, predictions_t
     column_to_rownames("cell_id")
   
   show_msg("Done")
+  
   return(scrna_data)
   
 }

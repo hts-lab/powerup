@@ -22,6 +22,7 @@ make_bulk_matrix_from_files <- function(bulk_files, pseudocount = 1){
     if (str_detect(file,"gene_reads.gct")){
 
         data <- readr::read_tsv(file, skip = 2, col_types = cols())
+        
         data <- data %>% select(-"Name") %>% dplyr::rename("gene" = "Description")
 
         data <- data %>% dplyr::group_by(gene) %>% dplyr::summarize_all(max)
@@ -36,6 +37,7 @@ make_bulk_matrix_from_files <- function(bulk_files, pseudocount = 1){
     } else {
 
         data <- readr::read_tsv(file, col_types = cols())
+        
         colnames(data) <- stringr::word(colnames(data),1,sep=".bam")
 
     }

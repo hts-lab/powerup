@@ -17,7 +17,9 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   get_xgb_shap_pred <- function(model, data){
     
     pfun <- function(object, newdata) {
+      
       predict(object, newdata = newdata)
+      
     }
     
     shap_obj <- fastshap::explain(model, exact = TRUE, 
