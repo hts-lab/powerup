@@ -14,7 +14,7 @@ Encoding: UTF-8
 LazyData: true
 Imports: 
     Seurat (>= 5.0.0),
-    edgeR (>= 4.4.1),
+    edgeR (>= 4.0.1),
     rlang (>= 1.1.4),
     cli (>= 3.6.2),
     stringi (>= 1.8.3),
