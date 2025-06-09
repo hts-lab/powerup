@@ -682,7 +682,6 @@ fit_models_and_save <- function(perturbs, chunk_indx,
   library(rsample)
   library(xgboost)
   library(fastshap)
-  library(mixmap)
   
   if (is.null(path)) path = "."
   
