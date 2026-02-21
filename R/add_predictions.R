@@ -47,7 +47,13 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   flush.console()
   
   # Keep only the features needed by the model
-  new_data <- new_data[, model$model$feature_names]
+  feat <- model$model$feature_names
+  missing <- setdiff(feat, colnames(new_data))
+  if (length(missing) > 0) {
+    stop(glue::glue("new_data is missing {length(missing)} required features, e.g. {missing[[1]]}"))
+  }
+  new_data <- new_data[, feat, drop = FALSE]
+
   
   # Convert to DMatrix
   new_data_dm <- xgb.DMatrix(new_data %>% as.matrix())

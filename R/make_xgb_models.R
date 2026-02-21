@@ -217,7 +217,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       term = names(shap_obj),
       value = apply(shap_obj, MARGIN = 2, FUN = function(x) sum(abs(x)))
     ) %>% arrange(desc(value))
-    
+      
     nonzero_terms <- contrib %>% filter(value > 0) %>% pull(term)
     
     shap_obj <- shap_obj %>% as.data.frame()
