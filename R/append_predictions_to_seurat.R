@@ -13,12 +13,16 @@
 #' @import readr
 #' @import stringr
 #' @import purrr
-#' @import Seurat
 #' @export
 #' @examples
 #' append_predictions_to_seurat("./data","my_seurat_object")
 append_predictions_to_seurat <- function(scrna_folder, scrna_name, predictions_table,
                                          scrna_group_cells_by = "seurat_clusters"){
+  
+    if (!requireNamespace("Seurat", quietly = TRUE)) {
+        stop("This function requires Seurat. Install it with install.packages('Seurat') or remotes::install_github(...).")
+    }
+
   
   show_msg("Loading {scrna_name} ..")
   

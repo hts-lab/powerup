@@ -22,8 +22,6 @@
 #' @import readr
 #' @import stringr
 #' @import purrr
-#' @import edgeR
-#' @import Seurat
 #' @export
 #' @examples
 #' make_bulk_matrix_from_seurat("./data","my_seurat_object")
@@ -43,6 +41,12 @@ make_bulk_matrix_from_seurat <- function(scrna_folder, scrna_name,
                                                ){
 
 
+    if (!requireNamespace("Seurat", quietly = TRUE)) {
+        stop("This function requires Seurat. Install it with install.packages('Seurat') or remotes::install_github(...).")
+    }
+
+    if (!requireNamespace("edgeR", quietly = TRUE)) stop("Requires edgeR")
+    
     # Load Seurat object
     show_msg("Loading {scrna_name} ..")
     scrna_data <- readRDS(glue::glue("{scrna_folder}/{scrna_name}.rds"))

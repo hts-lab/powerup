@@ -80,7 +80,7 @@ plot_top_contributors <- function(models,
 #' @param dims A 2-element vector with the dimensions to plot (default = c(1,2))
 #' @param fixed_color_scale Default = FALSE. If TRUE, the color scale will be fixed from 0 to 1.
 #' @keywords plot dimplot
-#' @import Seurat ggplot2 cowplot
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_predictions_dimplot(my_seurat_obj, "ko_ctnnb1")
@@ -89,6 +89,10 @@ plot_predictions_dimplot <- function(scRNA_data, perturbation, group_by = NULL,
                                         dims = c(1,2),
                                         fixed_color_scale = FALSE){
   
+    if (!requireNamespace("Seurat", quietly = TRUE)) {
+        stop("This function requires Seurat. Install it with install.packages('Seurat') or remotes::install_github(...).")
+    }
+
   feature_data <- scRNA_data@meta.data %>% select(all_of(perturbation)) %>% as_tibble(rownames = "cell_id")
   colnames(feature_data) <- c("cell_id","feature_data")
   
@@ -171,7 +175,7 @@ plot_predictions_dimplot <- function(scRNA_data, perturbation, group_by = NULL,
 #' @param highlight_significant If TRUE, a border will be shown to indicate the prediction interval is above 0.5. Default = FALSE.
 #' @param plot_new_data Set to TRUE if plotting the contribution to a new sample (not used in training).
 #' @keywords plot shapley contribution
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot data.table
 #' @export
 #' @examples
 #' plot_contribution_to_sample(my_models, model_dataset, "ko_ctnnb1", "my_sample")
@@ -346,7 +350,7 @@ plot_contribution_to_sample <- function(model, model_data, name, sample_names,
 #' @param sample_info If replace_names is TRUE, this must be supplied.
 #' @param show_error If TRUE, a shaded area will be used to visualize prediction interval. Default = TRUE.
 #' @keywords plot shapley contribution
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_contribution_to_training_sample(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, lineage_to_use = "soft_tissue")
@@ -404,7 +408,7 @@ plot_contribution_to_training_samples <- function(models, models_to_use, model_d
 #' @param sample_info If replace_names is TRUE, this must be supplied.
 #' @param show_error If TRUE, a shaded area will be used to visualize prediction interval. Default = TRUE.
 #' @keywords plot shapley contribution
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_contribution_to_sample_demo(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, "soft_tissue")
@@ -461,7 +465,7 @@ plot_contribution_to_new_samples <- function(models, models_to_use, model_data,
 #' @param sample_names The names of the samples we want to highlight.
 #' @param sample_colors If highlighting samples (with sample_names), this is a vector of colors to use.
 #' @keywords plot shapley contribution
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_shap_scatter(my_models, model_dataset, "ko_ctnnb1", "my_sample", "red")
@@ -602,7 +606,7 @@ plot_shap_scatter <- function(model, name, model_data,
 #' @param lineage_to_use Optional to highlight specific samples of certain lineage.
 #' @param sample_colors Color vector to use for samples_to_use.
 #' @keywords plot shapley contribution scatter
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_shap_scatter_for_training_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")
@@ -647,7 +651,7 @@ plot_shap_scatter_for_training_samples <- function(models, models_to_use, model_
 #' @param lineage_to_use Optional to highlight specific samples of certain lineage.
 #' @param sample_colors Color vector to use for samples_to_use.
 #' @keywords plot shapley contribution scatter
-#' @import Seurat ggplot2 cowplot data.table
+#' @import ggplot2 cowplot
 #' @export
 #' @examples
 #' plot_shap_scatter_for_new_samples(my_models, c("ko_ctnnb1","ko_myod1"), model_dataset, samples_to_use = "my_sample")

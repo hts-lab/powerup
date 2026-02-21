@@ -11,12 +11,13 @@
 #' @import readr
 #' @import stringr
 #' @import purrr
-#' @import edgeR
 #' @export
 #' @examples
 #' show_msg("The number of cells is {cell_count}")
 make_bulk_matrix_from_files <- function(bulk_files, pseudocount = 1){
     
+  if (!requireNamespace("edgeR", quietly = TRUE)) stop("Requires edgeR")
+
   load_bulk_data <- function(file, prior_count = 1){
 
     data <- NULL

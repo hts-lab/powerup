@@ -663,7 +663,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost purrr fastshap tidyverse glue lubridate tidymodels rsample
+#' @import xgboost purrr fastshap glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models_and_save(my_data, c("ko_ctnnb1","ko_myod1"))
@@ -679,11 +679,9 @@ fit_models_and_save <- function(perturbs, chunk_indx,
                                 cor_data = NULL, cor_n_features = 1000,
                                 use_gpu = TRUE, gpu_id = 0, seed = 123, path = NULL){
   
-  library(tidyverse)
   library(glue)
   library(purrr)
   library(lubridate)
-  library(tidymodels)
   library(rsample)
   library(xgboost)
   library(fastshap)
@@ -750,7 +748,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost purrr furrr future fastshap tidyverse glue lubridate tidymodels rsample
+#' @import xgboost future fastshap glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models_in_parallel(my_data, c("ko_ctnnb1","ko_myod1"))
@@ -814,7 +812,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost purrr furrr future fastshap tidyverse glue lubridate tidymodels rsample
+#' @import xgboost purrr furrr future fastshap glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models(my_data, c("ko_ctnnb1","ko_myod1"))
