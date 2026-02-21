@@ -1,7 +1,13 @@
+# powerup_platform_api.R
+
 #' POWERUP platform API (Cloud Run + standalone)
 #'
 #' These functions are called by the POWERUP worker container entrypoint.
 #' They MUST remain deterministic given the same inputs + seed.
+#'
+#' @name powerup_platform_api
+#' @keywords internal
+NULL
 
 suppressPackageStartupMessages({
   library(jsonlite)

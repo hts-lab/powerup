@@ -1,3 +1,5 @@
+# append_predictions_to_seurat.R
+
 #' Create a gene expression matrix to predict dependencies
 #'
 #' This function creates a gene expression matrix from a list of files, each containing bulk gene expression profiles. It returns a samples-by-genes matrix.

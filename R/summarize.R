@@ -1,3 +1,5 @@
+# summarize.R
+
 #' Summarize models
 #'
 #' This function generates a table with summary stats of each model

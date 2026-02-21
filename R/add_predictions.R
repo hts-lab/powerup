@@ -1,3 +1,5 @@
+# add_predictions.R
+
 #' Use a model to make predictions on new data
 #'
 #' This function takes new data, and produces predictions, error estimates, and SHAP values
@@ -18,7 +20,7 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     
     pfun <- function(object, newdata) {
       
-      predict(object, newdata = newdata)
+      stats::predict(object, newdata = newdata)
       
     }
     
@@ -27,14 +29,14 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
                                   pred_wrapper = pfun, adjust = TRUE)
     
     
-    contrib <- tibble(
+    contrib <- tibble::tibble(
       term = names(shap_obj),
       value = apply(shap_obj, MARGIN = 2, FUN = function(x) sum(abs(x)))
-    ) %>% arrange(desc(value))
-    
-    pos_terms <- contrib %>% filter(value > 0) %>% pull(term)
-    
-    shap_obj <- shap_obj %>% as.data.frame()
+    ) %>% dplyr::arrange(dplyr::desc(value))
+
+    pos_terms <- contrib %>% dplyr::filter(value > 0) %>% dplyr::pull(term)
+        
+    shap_obj <- as.data.frame(shap_obj)
     
     rownames(shap_obj) <- rownames(data)   
     
@@ -56,14 +58,14 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
 
   
   # Convert to DMatrix
-  new_data_dm <- xgb.DMatrix(new_data %>% as.matrix())
+  new_data_dm <- xgboost::xgb.DMatrix(as.matrix(new_data))
   
   # Make predictions and error estimates for each sample
-  predictions <- predict(model$model, new_data_dm)
-  error <- predict(model$error_model, new_data_dm)
+  predictions <- stats::predict(model$model, new_data_dm)
+  error <- stats::predict(model$error_model, new_data_dm)
   
   # Explain the predictions
-  shap <- get_xgb_shap_pred(model$model, new_data %>% as.matrix())
+  shap <- get_xgb_shap_pred(model$model, as.matrix(new_data))
   
   # Attach new data outputs to the original model
   model$new_data$data <- new_data
@@ -101,12 +103,11 @@ add_predictions <- function(models, new_data, models_to_use = NULL){
   inputs$name <- names(models)
   inputs$indx <- seq_along(models)
   
-  models_with_predictions <- pmap(inputs, make_new_data_predictions, 
-                                  total = length(inputs$indx),
-                                  new_data = new_data)
+  models_with_predictions <- purrr::pmap(inputs, make_new_data_predictions, 
+                                        total = length(inputs$indx),
+                                        new_data = new_data)
   
   
   return(models_with_predictions)
   
 }
-

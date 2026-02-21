@@ -1,3 +1,5 @@
+# plots.R
+
 #' Plot top contributions (internal function)
 #'
 #' This function generates a plot of the top contributing features for the top n models.

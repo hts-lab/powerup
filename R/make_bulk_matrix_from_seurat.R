@@ -1,3 +1,6 @@
+# make_bulk_matrix_from_seurat.R
+
+
 #' Create a gene expression matrix to predict dependencies
 #'
 #' This function creates a gene expression matrix from a list of files, each containing bulk gene expression profiles. It returns a samples-by-genes matrix.
@@ -12,7 +15,7 @@
 #' @param scrna_label_prefix When creating a pseudobulk profile for each subgroup, this is a prefix to add to their labels (default = "cluster").
 #' @param pseudocount An arbitrary small number to add to gene counts before log transformation. 1 works well for 10X data, 0.083 works well for Drop-seq data (default = 1).
 #' @param qvalue_cutoff FDR cutoff to consider a marker significant.
-#' @param force_find_markers By default, finding markers will be skipped if done previously (saved as [scrna_name].[scrna_group_cells_by].markers inside the [scrna_folder] folder). If TRUE, finding markers will always happen.
+#' @param force_find_markers By default, finding markers will be skipped if done previously (saved as scrna_name.scrna_group_cells_by.markers inside the scrna_folder folder). If TRUE, finding markers will always happen.
 #' @keywords pseudobulk
 #' @import tidyr
 #' @import dplyr

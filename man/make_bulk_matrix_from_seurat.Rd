@@ -44,7 +44,7 @@ make_bulk_matrix_from_seurat(
 
 \item{qvalue_cutoff}{FDR cutoff to consider a marker significant.}
 
-\item{force_find_markers}{By default, finding markers will be skipped if done previously (saved as \link{scrna_name}.\link{scrna_group_cells_by}.markers inside the \link{scrna_folder} folder). If TRUE, finding markers will always happen.}
+\item{force_find_markers}{By default, finding markers will be skipped if done previously (saved as scrna_name.scrna_group_cells_by.markers inside the scrna_folder folder). If TRUE, finding markers will always happen.}
 }
 \description{
 This function creates a gene expression matrix from a list of files, each containing bulk gene expression profiles. It returns a samples-by-genes matrix.

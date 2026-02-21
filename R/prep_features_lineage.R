@@ -1,3 +1,5 @@
+# prep_features_lineage.R
+
 #' Prepare the lineage features table
 #'
 #' This function creates a table with one-hot encoded lineage features

@@ -1,3 +1,6 @@
+# misc.R
+
+
 #' Display message
 #'
 #' This function prints a message and calls flush.console() to refresh output

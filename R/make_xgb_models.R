@@ -1,3 +1,6 @@
+# make_xgb_models.R
+
+
 #' Make predictive models of dependencies
 #'
 #' This function creates an XGBoost model
@@ -15,6 +18,7 @@
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
 #' @import xgboost purrr fastshap
+#' @import dplyr tibble glue lubridate rsample magrittr
 #' @export
 #' @examples
 #' make_xgb_model("ko_ctnnb1",1,1,my_data)
@@ -44,9 +48,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     if (is.null(cor_data)){
       
       prepared_data <- data %>%
-        mutate(y_value = get(perturbation)) %>% 
-        select(-starts_with(tag)) %>%
-        na.omit() %>% as_tibble(rownames = "cell_line") 
+        dplyr::mutate(y_value = get(perturbation)) %>% 
+        dplyr::select(-dplyr::starts_with(tag)) %>%
+        stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
       
     } else {
       
@@ -56,8 +60,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       if (perturbation %in% colnames(cor_data)){
         
         correlated_features <- cor_data %>%
-          top_n(cor_num, abs(get(perturbation))) %>%
-          pull(feature)
+          dplyr::top_n(cor_num, abs(get(perturbation))) %>%
+          dplyr::pull(feature)
         
       }
 
@@ -66,17 +70,17 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       if (!is.null(correlated_features) & length(correlated_features) > 0) {
         
         prepared_data <- data %>%
-          mutate(y_value = get(perturbation)) %>% 
-          select(-starts_with(tag)) %>%
-          select(y_value, any_of(correlated_features))  %>%
-          na.omit() %>% as_tibble(rownames = "cell_line") 
+          dplyr::mutate(y_value = get(perturbation)) %>% 
+          dplyr::select(-dplyr::starts_with(tag)) %>%
+          dplyr::select(y_value, dplyr::any_of(correlated_features))  %>%
+          stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
         
       } else {
         
         prepared_data <- data %>%
-          mutate(y_value = get(perturbation)) %>% 
-          select(-starts_with(tag)) %>%
-          na.omit() %>% as_tibble(rownames = "cell_line") 
+          dplyr::mutate(y_value = get(perturbation)) %>% 
+          dplyr::select(-dplyr::starts_with(tag)) %>%
+          stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
         
       }
       
@@ -87,10 +91,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
  
     
     # Create a response column to help stratify cases
-    prepared_data <- prepared_data %>% column_to_rownames("cell_line") %>% mutate(response = y_value > response_cutoff)
+    prepared_data <- prepared_data %>% tibble::column_to_rownames("cell_line") %>% dplyr::mutate(response = y_value > response_cutoff)
     
     # Note: We are using the full data as there is no tuning right now.
-    data_folds <- vfold_cv(prepared_data, v = nfolds, strata = y_value, repeats = nrepeats, breaks = 20, pool = 0.05)
+    data_folds <- rsample::vfold_cv(prepared_data, v = nfolds, strata = y_value, repeats = nrepeats, breaks = 20, pool = 0.05)
     
     output <- list()
     output$original_data <- prepared_data
@@ -144,26 +148,26 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     }
     
     # We count how many cases we have of each response 'status'
-    status_counts <- table(if_else(y_value >= response_cutoff, "A", "B"))
+    status_counts <- table(dplyr::if_else(y_value >= response_cutoff, "A", "B"))
     
     # Decide the majority group
-    status_major_count <- if_else(status_counts["A"] > status_counts["B"], status_counts["A"], status_counts["B"])
+    status_major_count <- dplyr::if_else(status_counts["A"] > status_counts["B"], status_counts["A"], status_counts["B"])
     
     # We calculate the weight of an individual sensitivity status
     status_weight <- 1/status_counts
     
     # We assign the weight to each observation based on observed sensitivity
-    weights <- if_else(y_value > response_cutoff, status_weight["A"], status_weight["B"])
+    weights <- dplyr::if_else(y_value > response_cutoff, status_weight["A"], status_weight["B"])
     
     # We normalize so that total weights add up to 1
     weights <- weights/sum(weights)
     
     # We cap each observation's individual weight at weight_cap
-    weights <- if_else(weights > weight_cap, weight_cap, weights)
+    weights <- dplyr::if_else(weights > weight_cap, weight_cap, weights)
     
     # We redistribute the 'lost' weight from the capping step to the remaining samples
     leftover_weight <- (1 - sum(weights))/status_major_count
-    weights <- if_else(weights == weight_cap, weight_cap, weights + leftover_weight)
+    weights <- dplyr::if_else(weights == weight_cap, weight_cap, weights + leftover_weight)
     
     return(weights)
     
@@ -173,7 +177,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_weighted_set <- function(data, weights){
     
     data <- data %>%
-      slice_sample(prop = 1,
+      dplyr::slice_sample(prop = 1,
                    replace = TRUE, 
                    weight_by = weights
       )
@@ -187,13 +191,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   # Optional: To generate a null model we can shuffle the outcome here
   get_DMatrix <- function(data, weights = NULL, shuffle = FALSE){
     
-    x_values <- data %>% select(-"y_value",-"response") %>% as.matrix()
-    y_values <- data %>% pull(y_value)
+    x_values <- data %>% dplyr::select(-"y_value",-"response") %>% as.matrix()
+    y_values <- data %>% dplyr::pull(y_value)
     if (shuffle) y_values <- sample(y_values)
     if(!is.null(weights)){
-      data <- xgb.DMatrix(data = x_values, label = y_values, weight = 1000*weights) 
+      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values, weight = 1000*weights) 
     } else {
-      data <- xgb.DMatrix(data = x_values, label = y_values) 
+      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values) 
     }
     
     
@@ -209,16 +213,16 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     shap_obj <- fastshap::explain(model, 
                                   exact = TRUE,
-                                  X = data %>% select(-"y_value",-"response") %>% as.matrix(), 
+                                  X = data %>% dplyr::select(-"y_value",-"response") %>% as.matrix(), 
                                   pred_wrapper = pfun, 
                                   adjust = TRUE)
     
-    contrib <- tibble(
+    contrib <- tibble::tibble(
       term = names(shap_obj),
       value = apply(shap_obj, MARGIN = 2, FUN = function(x) sum(abs(x)))
-    ) %>% arrange(desc(value))
+    ) %>% dplyr::arrange(dplyr::desc(value))
       
-    nonzero_terms <- contrib %>% filter(value > 0) %>% pull(term)
+    nonzero_terms <- contrib %>% dplyr::filter(value > 0) %>% dplyr::pull(term)
     
     shap_obj <- shap_obj %>% as.data.frame()
     rownames(shap_obj) <- rownames(data)   
@@ -269,11 +273,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_sensitivity <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
 
     
@@ -287,11 +291,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_specificity <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
     
     TN = sum(!pred_d & !obs_d)
@@ -303,11 +307,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_fpr <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
     
     FP = sum(pred_d & !obs_d)
@@ -320,11 +324,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_ppv <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
     
     TP = sum(pred_d & obs_d)
@@ -339,11 +343,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_npv <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
     
     TP = sum(pred_d & obs_d)
@@ -358,11 +362,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_discrete_accuracy <- function(pred, obs, discrete_cut, decreasing = F){
     
     if (decreasing){
-      pred_d = if_else(pred <= discrete_cut, T, F)
-      obs_d = if_else(obs <= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
     } else {
-      pred_d = if_else(pred >= discrete_cut, T, F)
-      obs_d = if_else(obs >= discrete_cut, T, F)
+      pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
+      obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
     
     TP = sum(pred_d & obs_d)
@@ -392,59 +396,59 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     data_splits = model_data$dfolds$splits
     
     # Grab the analysis parts, for each: resample with bias, and create a training DMatrix
-    training_sets <- map(data_splits, analysis)
+    training_sets <- purrr::map(data_splits, rsample::analysis)
     
     if(weight_cap > 0){    
-      training_weights <- training_sets %>% map(pull, y_value) %>% map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
+      training_weights <- training_sets %>% purrr::map(dplyr::pull, y_value) %>% purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
       # training_matrices <- training_sets %>% map2(training_weights, get_weighted_set) %>% map(get_DMatrix)
-      training_matrices <- training_sets %>% map2(training_weights, get_DMatrix, shuffle = shuffle)
+      training_matrices <- training_sets %>% purrr::map2(training_weights, get_DMatrix, shuffle = shuffle)
     } else {
-      training_matrices <- training_sets %>% map(get_DMatrix, shuffle = shuffle)
+      training_matrices <- training_sets %>% purrr::map(get_DMatrix, shuffle = shuffle)
     }
     
     # Grab the assessment parts, for each: do as above + pull the y_values for later use
-    validation_sets <- map(data_splits, assessment)
+    validation_sets <- purrr::map(data_splits, rsample::assessment)
     
     if(weight_cap > 0){
-      validation_weights <- validation_sets %>% map(pull, y_value) %>% map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
+      validation_weights <- validation_sets %>% purrr::map(dplyr::pull, y_value) %>% purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
       #  validation_matrices <- validation_sets %>% map2(validation_weights, get_weighted_set) 
-      validation_matrices <- validation_sets %>% map2(validation_weights, get_DMatrix) 
+      validation_matrices <- validation_sets %>% purrr::map2(validation_weights, get_DMatrix) 
     } else {
-      validation_matrices <- validation_sets %>% map(get_DMatrix)
+      validation_matrices <- validation_sets %>% purrr::map(get_DMatrix)
     }
     
-    validation_y_values <- map(validation_matrices, getinfo, "label") #instead of pull and "y_value")
+    validation_y_values <- purrr::map(validation_matrices, xgboost::getinfo, "label") #instead of pull and "y_value")
     #validation_matrices <- map(validation_matrices, get_DMatrix)
     
     # Use the analysis subsets for creating a model, then use the assessment subset to make predictions and calculate correlation
-    score_models <- map(training_matrices, xgboost, 
+    score_models <- purrr::map(training_matrices, xgboost::xgboost, 
                         params = model_params,
                         max_depth = max_depth,
                         subsample = f_subsample,
                         nthread = n_threads,
                         max_bin = 64,
-                        tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                        tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
                         gpu_id = gpu_id,
                         nrounds = nrounds,
                         early_stopping_rounds = 10, 
                         verbose = 0)
     
-    score_predictions <-  score_models %>% map2(validation_matrices, predict)
+    score_predictions <-  score_models %>% purrr::map2(validation_matrices, predict)
     
-    scores <- score_predictions %>% map2(validation_y_values, get_pseudo_cor) %>% unlist()
+    scores <- score_predictions %>% purrr::map2(validation_y_values, get_pseudo_cor) %>% unlist()
     
-    scores_rmse <- score_predictions %>% map2(validation_y_values, get_rmse) %>% unlist()
+    scores_rmse <- score_predictions %>% purrr::map2(validation_y_values, get_rmse) %>% unlist()
     
-    scores_R2 <- score_predictions %>% map2(validation_y_values, get_R2) %>% unlist()
+    scores_R2 <- score_predictions %>% purrr::map2(validation_y_values, get_R2) %>% unlist()
     
     
     # Discrete scores
-    scores_d_sensitivity <- score_predictions %>% map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
-    scores_d_specificity <- score_predictions %>% map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
-    scores_d_fpr <- score_predictions %>% map2(validation_y_values, get_discrete_fpr, response_cutoff, decreasing) %>% unlist()
-    scores_d_ppv <- score_predictions %>% map2(validation_y_values, get_discrete_ppv, response_cutoff, decreasing) %>% unlist()
-    scores_d_npv <- score_predictions %>% map2(validation_y_values, get_discrete_npv, response_cutoff, decreasing) %>% unlist()
-    scores_d_accuracy <- score_predictions %>% map2(validation_y_values, get_discrete_accuracy, response_cutoff, decreasing) %>% unlist()
+    scores_d_sensitivity <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
+    scores_d_specificity <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
+    scores_d_fpr <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_fpr, response_cutoff, decreasing) %>% unlist()
+    scores_d_ppv <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_ppv, response_cutoff, decreasing) %>% unlist()
+    scores_d_npv <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_npv, response_cutoff, decreasing) %>% unlist()
+    scores_d_accuracy <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_accuracy, response_cutoff, decreasing) %>% unlist()
     
     
     # Clean up
@@ -493,7 +497,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     last_params <- model_params # Ideally we have found the best params and we set them here
     last_nrounds <- nrounds # Ideally this has been tuned too
     
-    last_weights <- model_data$original_data %>% pull(y_value) %>% get_weights(response_cutoff = response_cutoff, weight_cap = weight_cap)
+    last_weights <- model_data$original_data %>% dplyr::pull(y_value) %>% get_weights(response_cutoff = response_cutoff, weight_cap = weight_cap)
     
     if (weight_cap > 0){
       #   last_matrix <-  get_weighted_set(model_data$original_data, last_weights) %>% get_DMatrix()
@@ -507,13 +511,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     last_validation <- get_DMatrix(model_data$original_data)
     
     # We fit a last model
-    last_model <- xgboost(data = last_matrix, 
+    last_model <- xgboost::xgboost(data = last_matrix, 
                           params = last_params, 
                           max_depth = max_depth,
                           subsample = f_subsample,
                           nthread = n_threads,
                           max_bin = 64,
-                          tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                          tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
                           gpu_id = gpu_id,
                           nrounds = last_nrounds, 
                           early_stopping_rounds = 10, verbose = 0)
@@ -529,17 +533,17 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     names(errors) <- rownames(model_data$original_data)
     
     # Create a matrix of errors vs features
-    error_data <- xgb.DMatrix(data = model_data$original_data %>% select(-"y_value",-"response") %>% as.matrix(),
+    error_data <- xgboost::xgb.DMatrix(data = model_data$original_data %>% dplyr::select(-"y_value",-"response") %>% as.matrix(),
                               label = errors^2)
     
     # Fit a model on error (using default params)
-    error_model <- xgboost(data = error_data, params = last_params,
+    error_model <- xgboost::xgboost(data = error_data, params = last_params,
                            max_depth = max_depth,
                            subsample = f_subsample,
                            nrounds = last_nrounds, early_stopping_rounds = 10, 
                            max_bin = 64,
                            nthread = n_threads,
-                           tree_method = if_else(use_gpu,"gpu_hist","auto"),
+                           tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
                            gpu_id = gpu_id,
                            verbose = 0) 
     
@@ -602,6 +606,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
 #' @import xgboost purrr fastshap
+#' @import dplyr tibble glue lubridate rsample magrittr
 #' @export
 #' @examples
 #' fit_depmap_models(my_data, c("ko_ctnnb1","ko_myod1"))
@@ -617,7 +622,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
                               cor_data = NULL, cor_n_features = 1000,
                               use_gpu = TRUE, gpu_id = 0){
   
-  my_models <- map2(
+  my_models <- purrr::map2(
     models_to_make, seq_along(models_to_make), make_xgb_model,  
     total = length(models_to_make),
     dataset = depmap_data,
@@ -826,7 +831,7 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
                                    n_threads = 4,
                                    use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
   
-  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] We will start fitting models for {length(selected_perturbs)} perturbations.
+  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] We will start fitting models for {length(perturbs)} perturbations.
     Data will be stored at  {path}/results"))
   
   
@@ -888,10 +893,8 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
   
   saveRDS(all_chunks,glue::glue("{path}/results/models.rds"))
   
-  show_msg(glue("[{lubridate::now('US/Eastern')}] Done. The overall average model accuracy (r) was {all_chunks %>% map('scores') %>% map(mean) %>% unlist() %>% mean()}"))
+  show_msg(glue("[{lubridate::now('US/Eastern')}] Done. The overall average model accuracy (r) was {all_chunks %>% purrr::map('scores') %>% purrr::map(mean) %>% unlist() %>% mean()}"))
   
   return("Done")
   
 }
-
-
