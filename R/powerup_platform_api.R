@@ -47,7 +47,7 @@ powerup_preprocess <- function(
   # TODO: replace these reads/transforms with existing logic
   # gene_expression <- readr::read_csv(gene_expression_path, show_col_types = FALSE)
   # response_df     <- readr::read_csv(response_path, show_col_types = FALSE)
-  # user_matrix     <- readr::read_tsv(matrix_path, show_col_types = FALSE)
+  # user_matrix     <- readr::read_csv(matrix_path, show_col_types = FALSE)
 
   # TODO: create deterministic perturbations table with modelKey -> perturbation as source of truth.
   # Must include columns: modelKey + perturbation
