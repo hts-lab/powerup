@@ -15,6 +15,8 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(tibble)
   library(glue)
+  library(digest)
+  library(data.table)
 })
 
 # ---- small utilities ----
@@ -27,8 +29,135 @@ powerup_write_json <- function(path, obj) {
   writeLines(jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE), con = path)
 }
 
+# ---- internal helpers (package-private) ----
+
+.pu_assert_file_exists <- function(path, label) {
+  if (!is.character(path) || length(path) != 1 || nchar(path) < 1) {
+    stop(glue("{label} must be a non-empty string"))
+  }
+  if (!file.exists(path)) {
+    stop(glue("{label} does not exist: {path}"))
+  }
+}
+
+.pu_normalize_id_col <- function(df, expected = "cell_line") {
+  if (!(expected %in% colnames(df))) {
+    # If the file doesn't have cell_line explicitly, treat first column as id
+    colnames(df)[1] <- expected
+  }
+  df[[expected]] <- as.character(df[[expected]])
+  df
+}
+
+.pu_coerce_numeric_cols <- function(df, id_col, label) {
+  cols <- setdiff(colnames(df), id_col)
+  if (length(cols) < 1) stop(glue("{label} has no columns besides {id_col}"))
+
+  for (cn in cols) {
+    v <- df[[cn]]
+    if (is.character(v)) {
+      suppressWarnings(vn <- as.numeric(v))
+      # If there were non-empty strings but coercion yields all NA -> hard fail
+      if (all(is.na(vn)) && any(nzchar(v))) {
+        stop(glue("{label} column '{cn}' is non-numeric and cannot be coerced"))
+      }
+      df[[cn]] <- vn
+    } else if (!is.numeric(v)) {
+      suppressWarnings(df[[cn]] <- as.numeric(v))
+    }
+  }
+  df
+}
+
+.pu_select_top_var_genes <- function(user_matrix, genes, n_features) {
+  genes <- intersect(genes, colnames(user_matrix))
+  m <- as.matrix(user_matrix[, genes, drop = FALSE])
+
+  vars <- apply(m, 2, stats::var, na.rm = TRUE)
+  vars[is.na(vars)] <- -Inf
+
+  ord <- order(-vars, names(vars))   # deterministic tiebreak by gene name
+  keep <- names(vars)[ord]
+  keep <- keep[seq_len(min(length(keep), n_features))]
+  keep <- keep[is.finite(vars[keep])]
+  keep
+}
+
+.pu_hash_to_index <- function(seed_int, perturbation, klass, n) {
+  key <- paste(seed_int, perturbation, klass, sep = "|")
+  h <- digest::digest(key, algo = "xxhash32", serialize = FALSE)
+  x <- strtoi(substr(h, 1, 8), base = 16)
+  (x %% n) + 1L
+}
+
+.pu_build_split <- function(seed_int, response_u, perturbations, sensitive_cutoff, resistant_cutoff) {
+  test_set <- character(0)
+  decisions <- vector("list", length(perturbations))
+  names(decisions) <- perturbations
+
+  for (p in perturbations) {
+    y <- response_u[[p]]
+
+    # If you want exact parity with your historical script, use strict > and <.
+    # Here we keep inclusive thresholds by default.
+    sens_ids <- response_u$cell_line[which(!is.na(y) & y >= sensitive_cutoff)]
+    res_ids  <- response_u$cell_line[which(!is.na(y) & y <= resistant_cutoff)]
+
+    sens_ids <- sort(unique(sens_ids))
+    res_ids  <- sort(unique(res_ids))
+
+    pick_one <- function(cands, klass) {
+      if (length(cands) == 0) return(NA_character_)
+      start <- .pu_hash_to_index(seed_int, p, klass, length(cands))
+      for (k in seq_len(length(cands))) {
+        j <- ((start - 1L + (k - 1L)) %% length(cands)) + 1L
+        choice <- cands[[j]]
+        if (!(choice %in% test_set)) return(choice)
+      }
+      cands[[start]]
+    }
+
+    sens_pick <- pick_one(sens_ids, "sensitive")
+    if (!is.na(sens_pick)) test_set <- c(test_set, sens_pick)
+
+    res_pick <- pick_one(res_ids, "resistant")
+    if (!is.na(res_pick)) test_set <- c(test_set, res_pick)
+
+    decisions[[p]] <- list(
+      nSensitive = length(sens_ids),
+      nResistant = length(res_ids),
+      pickedSensitive = sens_pick,
+      pickedResistant = res_pick
+    )
+  }
+
+  test_set <- sort(unique(test_set))
+  all_ids <- sort(unique(response_u$cell_line))
+  train_set <- setdiff(all_ids, test_set)
+
+  if (length(test_set) < 2) stop("Split produced too small test set; check thresholds/data")
+  if (length(train_set) < 10) stop("Split produced too small train set")
+
+  split_json <- list(
+    schemaVersion = 1,
+    seed = seed_int,
+    sensitiveCutoff = sensitive_cutoff,
+    resistantCutoff = resistant_cutoff,
+    trainIds = train_set,
+    testIds = test_set,
+    perPerturbation = decisions
+  )
+
+  list(
+    train_ids = train_set,
+    test_ids = test_set,
+    split_json = split_json
+  )
+}
+
 # ---- CONTRACT 1: preprocess ----
-# This is a thin deterministic builder to wire to existing split logic later.
+# Deterministic preprocessing owned by the R package.
+# Reads local staged inputs, writes only under out_preprocess_dir.
 #' @export
 powerup_preprocess <- function(
   gene_expression_path,
@@ -38,29 +167,148 @@ powerup_preprocess <- function(
   data_version,
   response_set,
   seed,
-  job_id
+  job_id,
+  n_features = 2000L,
+  targets = NULL,
+  sensitive_cutoff = 0.75,
+  resistant_cutoff = 0.25
 ) {
   powerup_dir_create(out_preprocess_dir)
 
-  set.seed(as.integer(seed))
+  seed_int <- as.integer(seed)
+  if (is.na(seed_int)) stop("seed must be integer-like")
 
-  # TODO: replace these reads/transforms with existing logic
-  # gene_expression <- readr::read_csv(gene_expression_path, show_col_types = FALSE)
-  # response_df     <- readr::read_csv(response_path, show_col_types = FALSE)
-  # user_matrix     <- readr::read_csv(matrix_path, show_col_types = FALSE)
+  message(glue("[powerup][jobId={job_id}] PREPROCESS start data_version={data_version} response_set={response_set} seed={seed_int}"))
 
-  # TODO: create deterministic perturbations table with modelKey -> perturbation as source of truth.
-  # Must include columns: modelKey + perturbation
-  #
-  # Write:
-  # - perturbations.csv
-  # - train_set.csv
-  # - test_set.csv
-  # - user_samples.csv
-  # - manifest.json (must contain seed)
+  # ---- Read inputs (strict) ----
+  .pu_assert_file_exists(gene_expression_path, "gene_expression_path")
+  .pu_assert_file_exists(response_path, "response_path")
+  .pu_assert_file_exists(matrix_path, "matrix_path")
 
-  # Placeholder to force wiring (remove once implemented):
-  stop("powerup_preprocess(): wire this to existing preprocessing/splitting logic.")
+  gene_expression <- readr::read_csv(gene_expression_path, show_col_types = FALSE, progress = FALSE)
+  response_df     <- readr::read_csv(response_path, show_col_types = FALSE, progress = FALSE)
+  user_matrix     <- readr::read_csv(matrix_path, show_col_types = FALSE, progress = FALSE)
+
+  # Normalize ID column name to cell_line (if first col not named)
+  gene_expression <- .pu_normalize_id_col(gene_expression, "cell_line")
+  response_df     <- .pu_normalize_id_col(response_df, "cell_line")
+  user_matrix     <- .pu_normalize_id_col(user_matrix, "cell_line")
+
+  # Coerce numerics (fail fast if non-numeric)
+  gene_expression <- .pu_coerce_numeric_cols(gene_expression, id_col = "cell_line", label = "gene_expression")
+  response_df     <- .pu_coerce_numeric_cols(response_df,     id_col = "cell_line", label = "response_df")
+  user_matrix     <- .pu_coerce_numeric_cols(user_matrix,     id_col = "cell_line", label = "user_matrix")
+
+  # ---- Validate overlaps ----
+  user_genes <- setdiff(colnames(user_matrix), "cell_line")
+  expr_genes <- setdiff(colnames(gene_expression), "cell_line")
+  common_genes <- intersect(user_genes, expr_genes)
+  if (length(common_genes) < 10) {
+    stop(glue("[powerup][jobId={job_id}] Too few overlapping genes between user matrix and gene_expression: overlap={length(common_genes)}"))
+  }
+
+  perturbations <- setdiff(colnames(response_df), "cell_line")
+  if (length(perturbations) < 1) stop(glue("[powerup][jobId={job_id}] response_df has no perturbation columns"))
+
+  if (!is.null(targets)) {
+    if (!is.character(targets) || length(targets) < 1) stop(glue("[powerup][jobId={job_id}] targets must be non-empty character vector"))
+    unknown <- setdiff(targets, perturbations)
+    if (length(unknown) > 0) stop(glue("[powerup][jobId={job_id}] targets contains unknown perturbations: {paste(head(unknown,25), collapse=', ')}"))
+    perturbations <- targets
+  }
+
+  # Universe = cell_line overlap between gene_expression and response
+  all_ids <- intersect(gene_expression$cell_line, response_df$cell_line)
+  all_ids <- sort(unique(all_ids))
+  if (length(all_ids) < 20) stop(glue("[powerup][jobId={job_id}] Too few overlapping cell_line IDs between gene_expression and response: n={length(all_ids)}"))
+
+  gene_expression_u <- gene_expression %>% dplyr::filter(.data$cell_line %in% all_ids)
+  response_u        <- response_df %>%
+    dplyr::filter(.data$cell_line %in% all_ids) %>%
+    dplyr::select(.data$cell_line, dplyr::all_of(perturbations))
+
+  # ---- Feature selection: top variable genes on user matrix (deterministic ties) ----
+  n_features_int <- max(1L, as.integer(n_features))
+  selected_genes <- .pu_select_top_var_genes(user_matrix, common_genes, n_features_int)
+  if (length(selected_genes) < 10) stop(glue("[powerup][jobId={job_id}] Feature selection produced too few genes: n={length(selected_genes)}"))
+
+  # Build feature tables
+  features_all <- gene_expression_u %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
+  features_user <- user_matrix %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
+
+  # ---- Deterministic perturbations table + model keys ----
+  perturbations <- sort(perturbations)
+  model_keys <- sprintf("%s_model_%05d", response_set, seq_along(perturbations))
+  perturbations_tbl <- tibble::tibble(
+    modelKey = model_keys,
+    perturbation = perturbations
+  )
+
+  # ---- Deterministic split (global test set) ----
+  split <- .pu_build_split(
+    seed_int = seed_int,
+    response_u = response_u,
+    perturbations = perturbations,
+    sensitive_cutoff = sensitive_cutoff,
+    resistant_cutoff = resistant_cutoff
+  )
+
+  train_ids <- split$train_ids
+  test_ids  <- split$test_ids
+
+  # Materialize outcomes/features by split
+  outcomes_train <- response_u %>% dplyr::filter(.data$cell_line %in% train_ids)
+  outcomes_test  <- response_u %>% dplyr::filter(.data$cell_line %in% test_ids)
+
+  features_train <- features_all %>% dplyr::filter(.data$cell_line %in% train_ids)
+  features_test  <- features_all %>% dplyr::filter(.data$cell_line %in% test_ids)
+
+  # ---- Write artifacts (stable filenames) ----
+  readr::write_csv(perturbations_tbl, file.path(out_preprocess_dir, "perturbations.csv"))
+
+  # Better split layout ONLY (no legacy wide tables)
+  readr::write_csv(features_train, file.path(out_preprocess_dir, "features_train.csv"))
+  readr::write_csv(features_test,  file.path(out_preprocess_dir, "features_test.csv"))
+  readr::write_csv(features_user,  file.path(out_preprocess_dir, "features_user.csv"))
+  readr::write_csv(outcomes_train, file.path(out_preprocess_dir, "outcomes_train.csv"))
+  readr::write_csv(outcomes_test,  file.path(out_preprocess_dir, "outcomes_test.csv"))
+
+  # split.json
+  powerup_write_json(file.path(out_preprocess_dir, "split.json"), split$split_json)
+
+  # manifest.json (minimum required)
+  manifest <- list(
+    schemaVersion = 1,
+    jobId = job_id,
+    createdAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    seed = seed_int,
+    dataVersion = data_version,
+    responseSet = response_set,
+    counts = list(
+      totalModels = length(perturbations),
+      nFeatures = length(selected_genes),
+      nTrain = length(train_ids),
+      nTest = length(test_ids),
+      nUser = nrow(features_user)
+    ),
+    artifacts = list(
+      perturbationsCsv = "perturbations.csv",
+      featuresTrainCsv = "features_train.csv",
+      featuresTestCsv = "features_test.csv",
+      featuresUserCsv = "features_user.csv",
+      outcomesTrainCsv = "outcomes_train.csv",
+      outcomesTestCsv = "outcomes_test.csv",
+      splitJson = "split.json"
+    ),
+    thresholds = list(
+      sensitive = sensitive_cutoff,
+      resistant = resistant_cutoff
+    )
+  )
+  powerup_write_json(file.path(out_preprocess_dir, "manifest.json"), manifest)
+
+  message(glue("[powerup][jobId={job_id}] PREPROCESS done models={length(perturbations)} features={length(selected_genes)} train={length(train_ids)} test={length(test_ids)} user={nrow(features_user)}"))
+  invisible(TRUE)
 }
 
 # ---- CONTRACT 2: train models ----
@@ -99,17 +347,9 @@ powerup_train_models <- function(
   powerup_dir_create(out_models_dir)
   set.seed(as.integer(seed))
 
-  # Load tables (or split artifacts) that have already been preprocessed.
-  train_df <- readr::read_csv(train_set_path, show_col_types = FALSE) %>% tibble::column_to_rownames("cell_line")
-  test_df  <- readr::read_csv(test_set_path,  show_col_types = FALSE) %>% tibble::column_to_rownames("cell_line")
-  user_df  <- readr::read_csv(user_samples_path, show_col_types = FALSE) %>% tibble::column_to_rownames("cell_line")
-
-  # perturbations table is the mapping source of truth
-  pert_tbl <- readr::read_csv(perturbations_path, show_col_types = FALSE)
+  # ---- perturbations table is the mapping source of truth ----
+  pert_tbl <- readr::read_csv(perturbations_path, show_col_types = FALSE, progress = FALSE)
   if (!("modelKey" %in% names(pert_tbl))) stop("perturbations.csv must contain column: modelKey")
-
-  # Build quick lookup from modelKey -> perturbation column name
-  # EXPECTATION: pert_tbl has a column "perturbation" that matches a column in train_df/test_df
   if (!("perturbation" %in% names(pert_tbl))) {
     stop("perturbations.csv must contain column: perturbation (maps modelKey -> dataset outcome column)")
   }
@@ -123,6 +363,48 @@ powerup_train_models <- function(
     stop(glue("Some modelKeys missing in perturbations.csv: {paste(missing, collapse=', ')}"))
   }
 
+  # ---- Split layout ONLY ----
+  # NOTE: train_set_path/test_set_path/user_samples_path are retained for signature compatibility,
+  # but we interpret them as anchors to find split-layout artifacts in the same directory.
+  features_train_path <- file.path(dirname(train_set_path), "features_train.csv")
+  features_test_path  <- file.path(dirname(test_set_path),  "features_test.csv")
+  features_user_path  <- file.path(dirname(user_samples_path), "features_user.csv")
+  outcomes_train_path <- file.path(dirname(train_set_path), "outcomes_train.csv")
+  outcomes_test_path  <- file.path(dirname(test_set_path),  "outcomes_test.csv")
+
+  .pu_assert_file_exists(features_train_path, "features_train.csv")
+  .pu_assert_file_exists(features_test_path, "features_test.csv")
+  .pu_assert_file_exists(features_user_path, "features_user.csv")
+  .pu_assert_file_exists(outcomes_train_path, "outcomes_train.csv")
+  .pu_assert_file_exists(outcomes_test_path, "outcomes_test.csv")
+
+  message(glue("[powerup][jobId={job_id}] Using split layout ONLY (features_* + outcomes_* with column-pruning)"))
+
+  # Features (shared across all models)
+  feat_train <- readr::read_csv(features_train_path, show_col_types = FALSE, progress = FALSE) %>%
+    tibble::column_to_rownames("cell_line")
+  feat_test <- readr::read_csv(features_test_path, show_col_types = FALSE, progress = FALSE) %>%
+    tibble::column_to_rownames("cell_line")
+  user_df <- readr::read_csv(features_user_path, show_col_types = FALSE, progress = FALSE) %>%
+    tibble::column_to_rownames("cell_line")
+
+  # Outcomes: read only the needed columns for this shard (cell_line + perturbations in shard)
+  needed_outcomes <- unique(key_map$perturbation)
+
+  out_train_tbl <- data.table::fread(
+    outcomes_train_path,
+    select = c("cell_line", needed_outcomes),
+    data.table = FALSE
+  )
+  out_test_tbl <- data.table::fread(
+    outcomes_test_path,
+    select = c("cell_line", needed_outcomes),
+    data.table = FALSE
+  )
+
+  out_train <- out_train_tbl %>% tibble::column_to_rownames("cell_line")
+  out_test  <- out_test_tbl  %>% tibble::column_to_rownames("cell_line")
+
   # We train each model and write artifacts per modelKey
   total <- length(model_keys)
 
@@ -133,8 +415,25 @@ powerup_train_models <- function(
     model_out_dir <- file.path(out_models_dir, mk)
     powerup_dir_create(model_out_dir)
 
-    # ---- Train Model ----
+    if (!(perturbation %in% colnames(out_train))) {
+      stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_train.csv"))
+    }
+    if (!(perturbation %in% colnames(out_test))) {
+      stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
+    }
 
+    # Build per-model dataset: outcome column + all features
+    train_df <- cbind(
+      setNames(as.data.frame(out_train[, perturbation, drop = FALSE]), perturbation),
+      feat_train
+    )
+
+    test_df <- cbind(
+      setNames(as.data.frame(out_test[, perturbation, drop = FALSE]), perturbation),
+      feat_test
+    )
+
+    # ---- Train Model ----
     fit <- make_xgb_model(
       perturbation = perturbation,
       indx = i,
@@ -160,7 +459,6 @@ powerup_train_models <- function(
     )
 
     # ---- Write Model Performance ----
-
     # metrics.json
     metrics <- list(
       jobId = job_id,
@@ -174,9 +472,7 @@ powerup_train_models <- function(
     )
     powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
-
     # ---- Make Predictions ----
-
     # pred_test.csv: predictions on held-out test set using the final trained model (if present).
     # pred_user.csv: predictions on user's samples using the final trained model (if present).
     # shap_user.csv: SHAP explanation values for user's sample predictions.
@@ -191,7 +487,7 @@ powerup_train_models <- function(
         new_data = test_df
       )
 
-      # This added $new_data with preds/errors/shap computed from model$model + model$error_model  
+      # This added $new_data with preds/errors/shap computed from model$model + model$error_model
       pred_test_tbl <- tibble::tibble(
         cell_line = names(fit_test$new_data$predictions),
         pred = as.numeric(fit_test$new_data$predictions),
@@ -204,7 +500,6 @@ powerup_train_models <- function(
       # shap_test_df <- fit_test$new_data$shap_values %>% tibble::rownames_to_column("cell_line")
       # readr::write_csv(shap_test_df, file.path(model_out_dir, "shap_test.csv"))
 
-
       # 2) User predictions
       fit_user <- make_new_data_predictions(
         model = fit,
@@ -214,7 +509,7 @@ powerup_train_models <- function(
         new_data = user_df
       )
 
-      # This added $new_data with preds/errors/shap computed from model$model + model$error_model    
+      # This added $new_data with preds/errors/shap computed from model$model + model$error_model
       pred_user_tbl <- tibble::tibble(
         cell_line = names(fit_user$new_data$predictions),
         pred = as.numeric(fit_user$new_data$predictions),
