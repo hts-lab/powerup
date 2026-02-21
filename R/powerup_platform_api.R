@@ -29,6 +29,7 @@ powerup_write_json <- function(path, obj) {
 
 # ---- CONTRACT 1: preprocess ----
 # This is a thin deterministic builder to wire to existing split logic later.
+#' @export
 powerup_preprocess <- function(
   gene_expression_path,
   response_path,
@@ -64,6 +65,7 @@ powerup_preprocess <- function(
 
 # ---- CONTRACT 2: train models ----
 # This function receives a list of model keys and trains them.
+#' @export
 powerup_train_models <- function(
   train_set_path,
   test_set_path,
@@ -250,6 +252,7 @@ powerup_train_models <- function(
 }
 
 # ---- CONTRACT 3: finalize ----
+#' @export
 powerup_finalize <- function(shard_manifests_dir, out_aggregates_dir, job_id) {
   powerup_dir_create(out_aggregates_dir)
 
