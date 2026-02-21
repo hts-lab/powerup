@@ -86,7 +86,11 @@ powerup_write_json <- function(path, obj) {
 .pu_hash_to_index <- function(seed_int, perturbation, klass, n) {
   key <- paste(seed_int, perturbation, klass, sep = "|")
   h <- digest::digest(key, algo = "xxhash32", serialize = FALSE)
-  x <- strtoi(substr(h, 1, 8), base = 16)
+
+  # Use 7 hex chars to avoid overflow/NA from strtoi()
+  x <- strtoi(substr(h, 1, 7), base = 16)
+  if (is.na(x) || n <= 0) stop("hash_to_index produced NA or invalid n")
+
   (x %% n) + 1L
 }
 
