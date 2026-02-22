@@ -159,13 +159,39 @@ powerup_write_json <- function(path, obj) {
   all_ids <- sort(unique(response_u$cell_line))
   train_set <- setdiff(all_ids, test_set)
 
+  n_all   <- length(all_ids)
+  n_test  <- length(test_set)
+  n_train <- length(train_set)
+  n_pert  <- length(perturbations)
+
   cat(sprintf(
     "[powerup] split summary: nPerturbations=%d nAllIds=%d nTest=%d nTrain=%d nPerClass=%d\n",
-    length(perturbations), length(all_ids), length(test_set), length(train_set), as.integer(n_per_class)
+    n_pert, n_all, n_test, n_train, as.integer(n_per_class)
   ))
 
-  if (length(test_set) < 2) stop("Split produced too small test set; check thresholds/data")
-  if (length(train_set) < 10) stop("Split produced too small train set")
+  if (n_test < 2) {
+    stop(sprintf(
+      "Split produced too small test set | nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d nPerClass=%d",
+      n_all, n_test, n_train, n_pert, as.integer(n_per_class)
+    ))
+  }
+
+  if (n_train < 10) {
+    stop(sprintf(
+      paste0(
+        "Split produced too small train set | ",
+        "nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d nPerClass=%d | ",
+        "firstTestIds=%s"
+      ),
+      n_all,
+      n_test,
+      n_train,
+      n_pert,
+      as.integer(n_per_class),
+      paste(head(test_set, 10), collapse = ",")
+    ))
+  }
+
 
   split_json <- list(
     schemaVersion = 1,
