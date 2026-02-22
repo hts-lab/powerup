@@ -101,7 +101,7 @@ powerup_write_json <- function(path, obj) {
   sensitive_cutoff,
   resistant_cutoff,
   n_per_class = 1L,      # kept for signature compatibility (we target >=1 each class under budget)
-  max_test_frac = 0.25   # hard cap for test set fraction
+  max_test_frac = 0.25   # hard cap for test set fraction as % of total cell lines
 ) {
   # -----------------------------
   # Setup + sanity
