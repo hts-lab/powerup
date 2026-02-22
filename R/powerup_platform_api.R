@@ -100,107 +100,235 @@ powerup_write_json <- function(path, obj) {
   perturbations,
   sensitive_cutoff,
   resistant_cutoff,
-  n_per_class = 1L  # set to 2L for "2 sensitive + 2 resistant" per perturbation
+  n_per_class = 1L,      # kept for signature compatibility (we target >=1 each class under budget)
+  max_test_frac = 0.25   # hard cap for test set fraction
 ) {
-  test_set <- character(0)
-  decisions <- vector("list", length(perturbations))
-  names(decisions) <- perturbations
+  # -----------------------------
+  # Setup + sanity
+  # -----------------------------
+  perturbations <- as.character(perturbations)
+  perturbations <- perturbations[perturbations %in% colnames(response_u)]
+  perturbations <- sort(unique(perturbations))
 
-  # Deterministic "pick the j-th candidate" without searching for unused replacements.
-  pick_k_no_replace <- function(cands, perturbation, klass, k, test_set) {
-    if (length(cands) == 0 || k <= 0) {
-      return(list(picks = character(0), attempted = character(0)))
-    }
+  all_ids <- sort(unique(as.character(response_u$cell_line)))
+  n_all <- length(all_ids)
+  if (n_all < 20) stop("Too few cell lines to split")
 
-    # Deterministic anchor position
-    start <- .pu_hash_to_index(seed_int, perturbation, klass, length(cands))
+  budget <- max(2L, min(n_all - 10L, as.integer(ceiling(max_test_frac * n_all))))
+  if (budget <= 1L) stop("Invalid test budget computed")
 
-    # Deterministically define k attempts as:
-    # start, start+1, ..., start+k-1 (wrapping)
-    idx <- ((start - 1L + seq_len(k) - 1L) %% length(cands)) + 1L
-    attempted <- cands[idx]
+  # Needs: for each perturbation, we want >=1 sensitive and >=1 resistant in test
+  need_sens <- rep(TRUE, length(perturbations))
+  need_res  <- rep(TRUE, length(perturbations))
+  names(need_sens) <- perturbations
+  names(need_res)  <- perturbations
 
-    # **NO REPLACEMENT POLICY**
-    # If an attempted pick is already in test_set, we DO NOT search for another.
-    picks <- attempted[!(attempted %in% test_set)]
-    list(picks = picks, attempted = attempted)
+  # Deterministic tiebreak hash for a cell line
+  hash_rank <- function(cell_line) {
+    h <- digest::digest(paste(seed_int, cell_line, sep = "|"), algo = "xxhash32", serialize = FALSE)
+    x <- strtoi(substr(h, 1, 7), base = 16)
+    if (is.na(x)) 0L else x
   }
 
-  for (p in perturbations) {
+  # -----------------------------
+  # Precompute coverage sets per cell line
+  #   sens_cov[[i]] = indices of perturbations where cell_line i is sensitive
+  #   res_cov[[i]]  = indices of perturbations where cell_line i is resistant
+  # -----------------------------
+  # Map ids to row index (response_u already filtered to overlap universe upstream)
+  id_vec <- as.character(response_u$cell_line)
+
+  # We'll build coverage via one pass over perturbations (column-wise)
+  n_p <- length(perturbations)
+  sens_cov <- vector("list", n_all)
+  res_cov  <- vector("list", n_all)
+  names(sens_cov) <- all_ids
+  names(res_cov)  <- all_ids
+  for (i in seq_len(n_all)) {
+    sens_cov[[i]] <- integer(0)
+    res_cov[[i]]  <- integer(0)
+  }
+
+  # To avoid repeated matching, precompute row indices for each all_id
+  # (response_u may already be in same order as all_ids; but we do a safe match)
+  row_of_id <- match(all_ids, id_vec)
+  if (any(is.na(row_of_id))) {
+    # Shouldn't happen since all_ids derived from response_u, but keep robust
+    row_of_id <- which(id_vec %in% all_ids)
+  }
+
+  # Column-wise scan
+  for (j in seq_len(n_p)) {
+    p <- perturbations[[j]]
     y <- response_u[[p]]
 
-    sens_ids <- response_u$cell_line[which(!is.na(y) & y >= sensitive_cutoff)]
-    res_ids  <- response_u$cell_line[which(!is.na(y) & y <= resistant_cutoff)]
+    # Pull values for all_ids in stable order
+    v <- y[row_of_id]
 
-    sens_ids <- sort(unique(sens_ids))
-    res_ids  <- sort(unique(res_ids))
+    sens_mask <- !is.na(v) & (v >= sensitive_cutoff)
+    res_mask  <- !is.na(v) & (v <= resistant_cutoff)
 
-    sens_out <- pick_k_no_replace(sens_ids, p, "sensitive", n_per_class, test_set)
-    if (length(sens_out$picks) > 0) test_set <- c(test_set, sens_out$picks)
+    if (any(sens_mask)) {
+      ids <- which(sens_mask)
+      for (ii in ids) sens_cov[[ii]] <- c(sens_cov[[ii]], j)
+    }
+    if (any(res_mask)) {
+      ids <- which(res_mask)
+      for (ii in ids) res_cov[[ii]] <- c(res_cov[[ii]], j)
+    }
+  }
 
-    res_out <- pick_k_no_replace(res_ids, p, "resistant", n_per_class, test_set)
-    if (length(res_out$picks) > 0) test_set <- c(test_set, res_out$picks)
+  # -----------------------------
+  # Greedy selection under budget
+  # -----------------------------
+  selected <- rep(FALSE, n_all)
+  test_set <- character(0)
 
-    decisions[[p]] <- list(
-      nSensitive = length(sens_ids),
-      nResistant = length(res_ids),
+  # Track unmet needs as logical vectors for fast sum()
+  need_sens_vec <- rep(TRUE, n_p)
+  need_res_vec  <- rep(TRUE, n_p)
 
-      # what we tried to pick (deterministic)
-      attemptedSensitive = sens_out$attempted,
-      attemptedResistant = res_out$attempted,
+  # Helper: compute marginal gain of candidate i
+  marginal_gain <- function(i) {
+    if (selected[[i]]) return(-1L)
 
-      # what actually got added (after "already in test_set" skipping)
-      pickedSensitive = sens_out$picks,
-      pickedResistant = res_out$picks
-    )
+    s_idx <- sens_cov[[i]]
+    r_idx <- res_cov[[i]]
+
+    gain <- 0L
+    if (length(s_idx) > 0) gain <- gain + sum(need_sens_vec[s_idx])
+    if (length(r_idx) > 0) gain <- gain + sum(need_res_vec[r_idx])
+
+    gain
+  }
+
+  # For determinism and speed, we’ll iterate and recompute gains each round.
+  # n_all ~1121 and budget ~280 => ~300k gain calcs; fine.
+  for (step in seq_len(budget)) {
+    # Stop early if all needs met
+    if (!any(need_sens_vec) && !any(need_res_vec)) break
+
+    best_i <- NA_integer_
+    best_gain <- -1L
+    best_hash <- Inf
+
+    for (i in seq_len(n_all)) {
+      if (selected[[i]]) next
+      g <- marginal_gain(i)
+      if (g < best_gain) next
+
+      # tie-break deterministically
+      h <- hash_rank(all_ids[[i]])
+      if (g > best_gain || (g == best_gain && h < best_hash)) {
+        best_gain <- g
+        best_i <- i
+        best_hash <- h
+      }
+    }
+
+    # If no candidate adds anything, stop
+    if (is.na(best_i) || best_gain <= 0L) break
+
+    # Select it
+    selected[[best_i]] <- TRUE
+    test_set <- c(test_set, all_ids[[best_i]])
+
+    # Update unmet needs
+    s_idx <- sens_cov[[best_i]]
+    r_idx <- res_cov[[best_i]]
+    if (length(s_idx) > 0) need_sens_vec[s_idx] <- FALSE
+    if (length(r_idx) > 0) need_res_vec[r_idx]  <- FALSE
   }
 
   test_set <- sort(unique(test_set))
-  all_ids <- sort(unique(response_u$cell_line))
   train_set <- setdiff(all_ids, test_set)
 
-  n_all   <- length(all_ids)
   n_test  <- length(test_set)
   n_train <- length(train_set)
-  n_pert  <- length(perturbations)
+
+  # -----------------------------
+  # Build decisions (compact!)
+  # For each perturbation, store ONE representative pickedSensitive/pickedResistant
+  # from within the final test_set (deterministic: lexicographically smallest id).
+  # -----------------------------
+  test_idx <- match(test_set, all_ids)
+  decisions <- vector("list", n_p)
+  names(decisions) <- perturbations
+
+  # Precompute membership for fast lookups
+  test_member <- rep(FALSE, n_all)
+  test_member[test_idx] <- TRUE
+
+  for (j in seq_len(n_p)) {
+    p <- perturbations[[j]]
+    y <- response_u[[p]][row_of_id]
+
+    sens_mask <- test_member & !is.na(y) & (y >= sensitive_cutoff)
+    res_mask  <- test_member & !is.na(y) & (y <= resistant_cutoff)
+
+    sens_ids <- all_ids[which(sens_mask)]
+    res_ids  <- all_ids[which(res_mask)]
+
+    picked_s <- if (length(sens_ids) > 0) sort(sens_ids)[[1]] else NA_character_
+    picked_r <- if (length(res_ids) > 0) sort(res_ids)[[1]] else NA_character_
+
+    decisions[[j]] <- list(
+      nSensitive = sum(!is.na(y) & (y >= sensitive_cutoff)),
+      nResistant = sum(!is.na(y) & (y <= resistant_cutoff)),
+      pickedSensitive = picked_s,
+      pickedResistant = picked_r
+    )
+  }
+
+  # Coverage stats
+  has_s <- vapply(decisions, function(d) !is.na(d$pickedSensitive), logical(1))
+  has_r <- vapply(decisions, function(d) !is.na(d$pickedResistant), logical(1))
+  has_both <- has_s & has_r
 
   cat(sprintf(
-    "[powerup] split summary: nPerturbations=%d nAllIds=%d nTest=%d nTrain=%d nPerClass=%d\n",
-    n_pert, n_all, n_test, n_train, as.integer(n_per_class)
+    paste0(
+      "[powerup] split summary (budgeted greedy): ",
+      "nPerturbations=%d nAllIds=%d budget=%d nTest=%d (%.1f%%) nTrain=%d | ",
+      "coveredSensitive=%d (%.1f%%) coveredResistant=%d (%.1f%%) coveredBoth=%d (%.1f%%)\n"
+    ),
+    n_p, n_all, budget, n_test, 100.0 * n_test / n_all, n_train,
+    sum(has_s), 100.0 * mean(has_s),
+    sum(has_r), 100.0 * mean(has_r),
+    sum(has_both), 100.0 * mean(has_both)
   ))
 
+  # Hard constraints
   if (n_test < 2) {
-    stop(sprintf(
-      "Split produced too small test set | nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d nPerClass=%d",
-      n_all, n_test, n_train, n_pert, as.integer(n_per_class)
-    ))
+    stop(sprintf("Split produced too small test set | nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d", n_all, n_test, n_train, n_p))
   }
-
   if (n_train < 10) {
     stop(sprintf(
-      paste0(
-        "Split produced too small train set | ",
-        "nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d nPerClass=%d | ",
-        "firstTestIds=%s"
-      ),
-      n_all,
-      n_test,
-      n_train,
-      n_pert,
-      as.integer(n_per_class),
-      paste(head(test_set, 10), collapse = ",")
+      "Split produced too small train set | nAllIds=%d nTest=%d nTrain=%d nPerturbations=%d | firstTestIds=%s",
+      n_all, n_test, n_train, n_p, paste(head(test_set, 10), collapse = ",")
+    ))
+  }
+  if (n_test > budget) {
+    stop(sprintf(
+      "Split violated test budget | nAllIds=%d budget=%d nTest=%d (%.1f%%)",
+      n_all, budget, n_test, 100.0 * n_test / n_all
     ))
   }
 
-
   split_json <- list(
-    schemaVersion = 1,
+    schemaVersion = 2,
     seed = seed_int,
     sensitiveCutoff = sensitive_cutoff,
     resistantCutoff = resistant_cutoff,
-    nPerClass = as.integer(n_per_class),
+    maxTestFrac = max_test_frac,
+    budget = budget,
     trainIds = train_set,
     testIds = test_set,
+    coverage = list(
+      coveredSensitive = sum(has_s),
+      coveredResistant = sum(has_r),
+      coveredBoth = sum(has_both),
+      totalPerturbations = n_p
+    ),
     perPerturbation = decisions
   )
 
@@ -307,7 +435,7 @@ powerup_preprocess <- function(
     perturbations = perturbations,
     sensitive_cutoff = sensitive_cutoff,
     resistant_cutoff = resistant_cutoff,
-    n_per_class = 2L
+    n_per_class = 1L
   )
 
   train_ids <- split$train_ids
