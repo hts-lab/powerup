@@ -567,9 +567,12 @@ powerup_train_models <- function(
   use_gpu = FALSE,
   gpu_id = 0
 ) {
+  
+
   powerup_dir_create(out_models_dir)
   set.seed(as.integer(seed))
 
+  
   # ---- Validate model_keys ----
   if (is.null(model_keys) || length(model_keys) == 0) {
     stop(glue("[powerup][jobId={job_id}] model_keys is empty"))
@@ -587,6 +590,44 @@ powerup_train_models <- function(
   }
 
   message(glue("[powerup][jobId={job_id}] Received {length(model_keys)} model_keys (sample: {paste(head(model_keys, 10), collapse=', ')})"))
+
+
+  # ------------------------------------------------------------
+  # TRACE CAPTURE (logging-only)
+  # Captures:
+  #  - base::traceback()
+  #  - sys.calls() call stack
+  #  - rlang::last_trace() when available
+  # ------------------------------------------------------------
+  .pu_capture_traces <- function() {
+    out <- list(
+      traceback = NA_character_,
+      calls = NA_character_,
+      rlang_last_trace = NA_character_
+    )
+
+    out$traceback <- tryCatch(
+      paste(utils::capture.output(base::traceback()), collapse = "\n"),
+      error = function(e) NA_character_
+    )
+
+    out$calls <- tryCatch({
+      calls <- sys.calls()
+      paste(vapply(calls, function(x) paste(deparse(x), collapse = ""), character(1)), collapse = "\n")
+    }, error = function(e) NA_character_)
+
+    out$rlang_last_trace <- tryCatch({
+      if (!requireNamespace("rlang", quietly = TRUE)) return(NA_character_)
+      lt <- rlang::last_trace()
+      paste(utils::capture.output(print(lt)), collapse = "\n")
+    }, error = function(e) NA_character_)
+
+    out
+  }
+
+  `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && !nzchar(x))) y else x
+  
+
 
 
   # ---- perturbations table is the mapping source of truth ----
@@ -751,65 +792,97 @@ powerup_train_models <- function(
       # shap_user.csv: SHAP explanation values for user's sample predictions.
       if (!is.null(fit$model)) {
 
-        # 1) Test predictions
-        fit_test <- make_new_data_predictions(
-          model = fit,
-          name = perturbation,
-          indx = i,
-          total = total,
-          new_data = test_df
-        )
+        # -----------------------------
+        # Stage-tagged prediction calls
+        # (logging-only; no behavior changes)
+        # -----------------------------
+        stage <- "INIT"
 
-        # This added $new_data with preds/errors/shap computed from model$model + model$error_model
+        fit_test <- NULL
+        fit_user <- NULL
+
+        # 1) Test predictions
+        stage <- "PREDICT_TEST: make_new_data_predictions(test_df)"
+        fit_test <- tryCatch({
+          make_new_data_predictions(
+            model = fit,
+            name = perturbation,
+            indx = i,
+            total = total,
+            new_data = test_df
+          )
+        }, error = function(e) {
+          tr <- .pu_capture_traces()
+          msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
+          message(msg)
+          if (nzchar(tr$traceback %||% "")) message(glue("[powerup][jobId={job_id}] {stage} traceback:\n{tr$traceback}"))
+          if (nzchar(tr$calls %||% "")) message(glue("[powerup][jobId={job_id}] {stage} calls:\n{tr$calls}"))
+          if (nzchar(tr$rlang_last_trace %||% "")) message(glue("[powerup][jobId={job_id}] {stage} rlang::last_trace:\n{tr$rlang_last_trace}"))
+          stop(e)
+        })
+
         pred_test_tbl <- tibble::tibble(
           cell_line = names(fit_test$new_data$predictions),
           pred = as.numeric(fit_test$new_data$predictions),
           pred_error = as.numeric(fit_test$new_data$predictions_error)
         )
-
         readr::write_csv(pred_test_tbl, file.path(model_out_dir, "pred_test.csv"))
 
-        # TODO: If we want SHAP for test too, write it out:
-        # shap_test_df <- fit_test$new_data$shap_values %>% tibble::rownames_to_column("cell_line")
-        # readr::write_csv(shap_test_df, file.path(model_out_dir, "shap_test.csv"))
-
         # 2) User predictions
-        fit_user <- make_new_data_predictions(
-          model = fit,
-          name = perturbation,
-          indx = i,
-          total = total,
-          new_data = user_df
-        )
+        stage <- "PREDICT_USER: make_new_data_predictions(user_df)"
+        fit_user <- tryCatch({
+          make_new_data_predictions(
+            model = fit,
+            name = perturbation,
+            indx = i,
+            total = total,
+            new_data = user_df
+          )
+        }, error = function(e) {
+          tr <- .pu_capture_traces()
+          msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
+          message(msg)
+          if (nzchar(tr$traceback %||% "")) message(glue("[powerup][jobId={job_id}] {stage} traceback:\n{tr$traceback}"))
+          if (nzchar(tr$calls %||% "")) message(glue("[powerup][jobId={job_id}] {stage} calls:\n{tr$calls}"))
+          if (nzchar(tr$rlang_last_trace %||% "")) message(glue("[powerup][jobId={job_id}] {stage} rlang::last_trace:\n{tr$rlang_last_trace}"))
+          stop(e)
+        })
 
-        # This added $new_data with preds/errors/shap computed from model$model + model$error_model
         pred_user_tbl <- tibble::tibble(
           cell_line = names(fit_user$new_data$predictions),
           pred = as.numeric(fit_user$new_data$predictions),
           pred_error = as.numeric(fit_user$new_data$predictions_error)
         )
-
         readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
 
-        shap_user_df <- fit_user$new_data$shap_values %>%
-          as.data.frame() %>%
-          tibble::rownames_to_column("cell_line")
+        # 3) SHAP extraction
+        stage <- "SHAP_USER: extract fit_user$new_data$shap_values"
+        shap_user_df <- tryCatch({
+          fit_user$new_data$shap_values %>%
+            as.data.frame() %>%
+            tibble::rownames_to_column("cell_line")
+        }, error = function(e) {
+          tr <- .pu_capture_traces()
+          msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
+          message(msg)
+          if (nzchar(tr$traceback %||% "")) message(glue("[powerup][jobId={job_id}] {stage} traceback:\n{tr$traceback}"))
+          if (nzchar(tr$calls %||% "")) message(glue("[powerup][jobId={job_id}] {stage} calls:\n{tr$calls}"))
+          if (nzchar(tr$rlang_last_trace %||% "")) message(glue("[powerup][jobId={job_id}] {stage} rlang::last_trace:\n{tr$rlang_last_trace}"))
+          stop(e)
+        })
 
         readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
 
-        # TODO: If we also want a compact feature importance table:
-        # readr::write_csv(fit_user$new_data$feature_contribution, file.path(model_out_dir, "shap_importance.csv"))
-
-        # clean intermediates
         rm(fit_test, fit_user)
         gc()
 
       } else {
-        # Model skipped — we still write empty artifacts
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
       }
+
+
 
       message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) OK skipped={is.null(fit$model)}"))
 
@@ -825,11 +898,10 @@ powerup_train_models <- function(
       message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) FAILED: {err_txt}"))
 
       # Capture a compact traceback as text (best-effort, no extra deps)
-      tb <- tryCatch({
-        paste(utils::capture.output(traceback(2)), collapse = "\n")
-      }, error = function(.e2) {
-        NA_character_
-      })
+      tr <- .pu_capture_traces()
+      tb <- tr$traceback
+      calls_txt <- tr$calls
+      rlang_trace_txt <- tr$rlang_last_trace
 
       # metrics.json with error details
       metrics <- list(
@@ -844,7 +916,9 @@ powerup_train_models <- function(
         error = list(
           message = err_txt,
           class = class(e)[1],
-          traceback = tb
+          traceback = tb,
+          calls = calls_txt,
+          rlang_last_trace = rlang_trace_txt
         )
       )
       powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)

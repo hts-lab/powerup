@@ -207,36 +207,146 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
   
   # This calculates SHAP values
-  get_xgb_shap <- function(model, data){
+  # This calculates SHAP values
+get_xgb_shap <- function(model, data){
+
+  cat("[SHAP] ENTER get_xgb_shap\n")
+  flush.console()
+
+  cat("[SHAP] fastshap version:", as.character(utils::packageVersion("fastshap")), "\n")
+  cat("[SHAP] xgboost version:", as.character(utils::packageVersion("xgboost")), "\n")
+  flush.console()
+
+  X_mat <- data %>% dplyr::select(-"y_value", -"response") %>% as.matrix()
+
+  cat("[SHAP] X_mat dim:", paste(dim(X_mat), collapse=" x "), "\n")
+  flush.console()
+
+  pfun <- function(object, newdata) {
+    predict(object, xgboost::xgb.DMatrix(newdata))
+  }
+
+  shap_obj <- tryCatch({
+
+    cat("[SHAP] calling fastshap::explain(exact=TRUE, adjust=TRUE)\n")
+    flush.console()
+
+    fastshap::explain(
+      model,
+      exact = TRUE,
+      X = X_mat,
+      pred_wrapper = pfun,
+      adjust = TRUE
+    )
+
+  }, error = function(e) {
+
+    cat("[SHAP] ERROR inside fastshap::explain()\n")
+    cat("[SHAP] conditionMessage:", conditionMessage(e), "\n")
+
+    cat("[SHAP] traceback():\n")
+    try(print(utils::capture.output(traceback())), silent = TRUE)
+
+    cat("[SHAP] sys.calls():\n")
+    try(print(utils::capture.output(sys.calls())), silent = TRUE)
+
+    flush.console()
+
+    stop(e)
+  })
+
+  # If we get here, explain() returned something
+  cat("[SHAP] explain() returned\n")
+  cat("[SHAP] class:", paste(class(shap_obj), collapse=", "), "\n")
+
+  if (!is.null(dim(shap_obj))) {
+    cat("[SHAP] dim:", paste(dim(shap_obj), collapse=" x "), "\n")
+  } else {
+    cat("[SHAP] shap_obj has no dim()\n")
+  }
+
+  cat("[SHAP] colnames head:\n")
+  try(print(head(colnames(shap_obj))), silent = TRUE)
+
+  cat("[SHAP] names() is NULL?:", is.null(names(shap_obj)), "\n")
+  cat("[SHAP] colnames() is NULL?:", is.null(colnames(shap_obj)), "\n")
+
+  cat("[SHAP] head(names()):\n")
+  try(print(utils::head(names(shap_obj))), silent = TRUE)
+
+  cat("[SHAP] head(colnames()):\n")
+  try(print(utils::head(colnames(shap_obj))), silent = TRUE)
+
+  cat("[SHAP] identical(names, colnames)?:",
+      isTRUE(identical(names(shap_obj), colnames(shap_obj))), "\n")
+
+  cat("[SHAP] typeof:", typeof(shap_obj), "\n")
+  cat("[SHAP] is.matrix:", is.matrix(shap_obj), "\n")
+  cat("[SHAP] is.data.frame:", is.data.frame(shap_obj), "\n")
+
+  cat("[SHAP] str(shap_obj) (top-level):\n")
+  try(utils::str(shap_obj, max.level = 2), silent = TRUE)
+
+  flush.console()
+
+  cat("[SHAP] any BIAS column?:",
+      if (!is.null(colnames(shap_obj))) any(colnames(shap_obj) == "BIAS") else "NO COLNAMES",
+      "\n")
+
+  flush.console()
+
+  # Now instrument the contrib block separately
+  contrib <- tryCatch({
+
+    cat("[SHAP] computing contrib tibble\n")
+    flush.console()
+
+    cat("[SHAP] contrib inputs:",
+      "length(names)=", length(names(shap_obj)),
+      "ncol=", if (!is.null(dim(shap_obj))) ncol(shap_obj) else NA,
+      "\n")
+    flush.console()
     
-    pfun <- function(object, newdata) {
-      predict(object, xgboost::xgb.DMatrix(newdata))
-    }
-    
-    shap_obj <- fastshap::explain(model, 
-                                  exact = TRUE,
-                                  X = data %>% dplyr::select(-"y_value",-"response") %>% as.matrix(), 
-                                  pred_wrapper = pfun, 
-                                  adjust = TRUE)
-    
-    contrib <- tibble::tibble(
+    tibble::tibble(
       term = names(shap_obj),
       value = apply(shap_obj, MARGIN = 2, FUN = function(x) sum(abs(x)))
-    ) %>% dplyr::arrange(dplyr::desc(value))
-      
-    nonzero_terms <- contrib %>% dplyr::filter(value > 0) %>% dplyr::pull(term)
-    
-    shap_obj <- shap_obj %>% as.data.frame()
-    rownames(shap_obj) <- rownames(data)   
-    
-    shap_output <- list()
-    shap_output$shap_values = shap_obj
-    shap_output$shap_table = contrib
-    shap_output$good_terms = nonzero_terms
-    
-    return(shap_output)
-    
-  }
+    ) %>%
+      dplyr::arrange(dplyr::desc(value))
+
+  }, error = function(e) {
+
+    cat("[SHAP] ERROR inside contrib block\n")
+    cat("[SHAP] conditionMessage:", conditionMessage(e), "\n")
+
+    cat("[SHAP] traceback():\n")
+    try(print(utils::capture.output(traceback())), silent = TRUE)
+
+    cat("[SHAP] sys.calls():\n")
+    try(print(utils::capture.output(sys.calls())), silent = TRUE)
+
+    flush.console()
+
+    stop(e)
+  })
+
+  nonzero_terms <- contrib %>%
+    dplyr::filter(value > 0) %>%
+    dplyr::pull(term)
+
+  shap_obj <- shap_obj %>% as.data.frame()
+  rownames(shap_obj) <- rownames(data)
+
+  shap_output <- list()
+  shap_output$shap_values = shap_obj
+  shap_output$shap_table = contrib
+  shap_output$good_terms = nonzero_terms
+
+  cat("[SHAP] EXIT get_xgb_shap\n")
+  flush.console()
+
+  return(shap_output)
+}
+
   
   
   # If the SD is zero, cor() will throw an error
