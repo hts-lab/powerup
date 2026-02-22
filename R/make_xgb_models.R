@@ -205,9 +205,59 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     
     return(data)
   }
-  
-  # This calculates SHAP values
-  # This calculates SHAP values
+
+
+.pu_debug_fastshap_xgb_inputs <- function(model, X_mat, prefix = "[SHAP][DBG]") {
+  cat(prefix, "model class:", paste(class(model), collapse = ","), "\n")
+  cat(prefix, "inherits xgb.Booster:", inherits(model, "xgb.Booster"), "\n")
+
+  # Model attributes often include feature_names depending on how it was trained
+  attrs <- tryCatch(xgboost::xgb.attributes(model), error = function(e) NULL)
+  if (!is.null(attrs)) {
+    cat(prefix, "xgb.attributes names:", paste(names(attrs), collapse = ", "), "\n")
+    if (!is.null(attrs$feature_names)) {
+      cat(prefix, "xgb.attributes$feature_names length:", length(attrs$feature_names), "\n")
+      cat(prefix, "xgb.attributes$feature_names head:", paste(head(attrs$feature_names, 10), collapse = ", "), "\n")
+    }
+  } else {
+    cat(prefix, "xgb.attributes: <unavailable>\n")
+  }
+
+  cat(prefix, "X_mat class:", paste(class(X_mat), collapse = ","), "\n")
+  cat(prefix, "X_mat typeof:", typeof(X_mat), "\n")
+  cat(prefix, "X_mat dim:", paste(dim(X_mat), collapse = " x "), "\n")
+  cat(prefix, "X_mat has colnames:", !is.null(colnames(X_mat)), "\n")
+  if (!is.null(colnames(X_mat))) {
+    cat(prefix, "X_mat colnames head:", paste(head(colnames(X_mat), 10), collapse = ", "), "\n")
+    cat(prefix, "X_mat colnames any duplicated:", anyDuplicated(colnames(X_mat)) > 0, "\n")
+  }
+
+  # THIS is the exact call fastshap uses in explain.xgb.Booster when exact=TRUE
+  phis <- tryCatch(
+    stats::predict(model, newdata = X_mat, predcontrib = TRUE, approxcontrib = FALSE),
+    error = function(e) e
+  )
+
+  if (inherits(phis, "error")) {
+    cat(prefix, "predict(predcontrib=TRUE) ERROR:", conditionMessage(phis), "\n")
+    return(invisible(FALSE))
+  }
+
+  cat(prefix, "predict(predcontrib=TRUE) returned class:", paste(class(phis), collapse = ","), "\n")
+  cat(prefix, "phis dim:", paste(dim(phis), collapse = " x "), "\n")
+  cat(prefix, "phis has colnames:", !is.null(colnames(phis)), "\n")
+  if (!is.null(colnames(phis))) {
+    cat(prefix, "phis colnames tail:", paste(tail(colnames(phis), 5), collapse = ", "), "\n")
+    cat(prefix, "phis contains 'BIAS':", "BIAS" %in% colnames(phis), "\n")
+  } else {
+    cat(prefix, "phis colnames are NULL -> fastshap will FAIL at phis[, 'BIAS']\n")
+  }
+
+  invisible(TRUE)
+}
+
+
+# This calculates SHAP values
 get_xgb_shap <- function(model, data){
 
   cat("[SHAP] ENTER get_xgb_shap\n")
@@ -218,6 +268,9 @@ get_xgb_shap <- function(model, data){
   flush.console()
 
   X_mat <- data %>% dplyr::select(-"y_value", -"response") %>% as.matrix()
+
+  .pu_debug_fastshap_xgb_inputs(model, X_mat)
+  
 
   cat("[SHAP] X_mat dim:", paste(dim(X_mat), collapse=" x "), "\n")
   flush.console()
