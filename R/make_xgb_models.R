@@ -17,7 +17,7 @@
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
-#' @import xgboost purrr fastshap
+#' @import xgboost purrr
 #' @import dplyr tibble glue lubridate rsample magrittr
 #' @export
 #' @examples
@@ -193,7 +193,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   # Optional: To generate a null model we can shuffle the outcome here
   get_DMatrix <- function(data, weights = NULL, shuffle = FALSE){
     
-    x_values <- data %>% dplyr::select(-"y_value",-"response") %>% as.matrix()
+    x_df <- data %>% dplyr::select(-"y_value", -"response")
+    x_values <- as.matrix(x_df)
+    storage.mode(x_values) <- "double"
     y_values <- data %>% dplyr::pull(y_value)
     if (shuffle) y_values <- sample(y_values)
     if(!is.null(weights)){
@@ -207,197 +209,70 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
 
 
-.pu_debug_fastshap_xgb_inputs <- function(model, X_mat, prefix = "[SHAP][DBG]") {
-  cat(prefix, "model class:", paste(class(model), collapse = ","), "\n")
-  cat(prefix, "inherits xgb.Booster:", inherits(model, "xgb.Booster"), "\n")
-
-  # Model attributes often include feature_names depending on how it was trained
-  attrs <- tryCatch(xgboost::xgb.attributes(model), error = function(e) NULL)
-  if (!is.null(attrs)) {
-    cat(prefix, "xgb.attributes names:", paste(names(attrs), collapse = ", "), "\n")
-    if (!is.null(attrs$feature_names)) {
-      cat(prefix, "xgb.attributes$feature_names length:", length(attrs$feature_names), "\n")
-      cat(prefix, "xgb.attributes$feature_names head:", paste(head(attrs$feature_names, 10), collapse = ", "), "\n")
-    }
-  } else {
-    cat(prefix, "xgb.attributes: <unavailable>\n")
-  }
-
-  cat(prefix, "X_mat class:", paste(class(X_mat), collapse = ","), "\n")
-  cat(prefix, "X_mat typeof:", typeof(X_mat), "\n")
-  cat(prefix, "X_mat dim:", paste(dim(X_mat), collapse = " x "), "\n")
-  cat(prefix, "X_mat has colnames:", !is.null(colnames(X_mat)), "\n")
-  if (!is.null(colnames(X_mat))) {
-    cat(prefix, "X_mat colnames head:", paste(head(colnames(X_mat), 10), collapse = ", "), "\n")
-    cat(prefix, "X_mat colnames any duplicated:", anyDuplicated(colnames(X_mat)) > 0, "\n")
-  }
-
-  # THIS is the exact call fastshap uses in explain.xgb.Booster when exact=TRUE
-  phis <- tryCatch(
-    stats::predict(model, newdata = X_mat, predcontrib = TRUE, approxcontrib = FALSE),
-    error = function(e) e
-  )
-
-  if (inherits(phis, "error")) {
-    cat(prefix, "predict(predcontrib=TRUE) ERROR:", conditionMessage(phis), "\n")
-    return(invisible(FALSE))
-  }
-
-  cat(prefix, "predict(predcontrib=TRUE) returned class:", paste(class(phis), collapse = ","), "\n")
-  cat(prefix, "phis dim:", paste(dim(phis), collapse = " x "), "\n")
-  cat(prefix, "phis has colnames:", !is.null(colnames(phis)), "\n")
-  if (!is.null(colnames(phis))) {
-    cat(prefix, "phis colnames tail:", paste(tail(colnames(phis), 5), collapse = ", "), "\n")
-    cat(prefix, "phis contains 'BIAS':", "BIAS" %in% colnames(phis), "\n")
-  } else {
-    cat(prefix, "phis colnames are NULL -> fastshap will FAIL at phis[, 'BIAS']\n")
-  }
-
-  invisible(TRUE)
-}
-
-
 # This calculates SHAP values
-get_xgb_shap <- function(model, data){
-
+get_xgb_shap <- function(model, X, sample_names = NULL) {
   cat("[SHAP] ENTER get_xgb_shap\n")
   flush.console()
 
-  cat("[SHAP] fastshap version:", as.character(utils::packageVersion("fastshap")), "\n")
-  cat("[SHAP] xgboost version:", as.character(utils::packageVersion("xgboost")), "\n")
-  flush.console()
+  X_mat <- as.matrix(X)
+  storage.mode(X_mat) <- "double"
 
-  X_mat <- data %>% dplyr::select(-"y_value", -"response") %>% as.matrix()
-
-  .pu_debug_fastshap_xgb_inputs(model, X_mat)
-  
-
-  cat("[SHAP] X_mat dim:", paste(dim(X_mat), collapse=" x "), "\n")
-  flush.console()
-
-  pfun <- function(object, newdata) {
-    predict(object, xgboost::xgb.DMatrix(newdata))
+  if (!inherits(model, "xgb.Booster")) {
+    stop("get_xgb_shap currently supports xgb.Booster only (fastshap bypass).")
   }
 
-  shap_obj <- tryCatch({
+  cat("[SHAP] Using xgboost predcontrib=TRUE (bypass fastshap)\n")
+  flush.console()
 
-    cat("[SHAP] calling fastshap::explain(exact=TRUE, adjust=TRUE)\n")
-    flush.console()
+  dm <- xgboost::xgb.DMatrix(data = X_mat)
+  phis <- predict(model, dm, predcontrib = TRUE)
+  phis <- as.matrix(phis)
 
-    fastshap::explain(
-      model,
-      exact = TRUE,
-      X = X_mat,
-      pred_wrapper = pfun,
-      adjust = TRUE
-    )
+  cn <- colnames(phis)
+  bias_idx <- NA_integer_
+  if (!is.null(cn)) {
+    if ("BIAS" %in% cn) bias_idx <- which(cn == "BIAS")[1]
+    if (is.na(bias_idx) && "(Intercept)" %in% cn) bias_idx <- which(cn == "(Intercept)")[1]
+  }
+  if (is.na(bias_idx)) bias_idx <- ncol(phis)
 
-  }, error = function(e) {
+  bias <- phis[, bias_idx]
+  shap <- phis[, -bias_idx, drop = FALSE]
 
-    cat("[SHAP] ERROR inside fastshap::explain()\n")
-    cat("[SHAP] conditionMessage:", conditionMessage(e), "\n")
-
-    cat("[SHAP] traceback():\n")
-    try(print(utils::capture.output(traceback())), silent = TRUE)
-
-    cat("[SHAP] sys.calls():\n")
-    try(print(utils::capture.output(sys.calls())), silent = TRUE)
-
-    flush.console()
-
-    stop(e)
-  })
-
-  # If we get here, explain() returned something
-  cat("[SHAP] explain() returned\n")
-  cat("[SHAP] class:", paste(class(shap_obj), collapse=", "), "\n")
-
-  if (!is.null(dim(shap_obj))) {
-    cat("[SHAP] dim:", paste(dim(shap_obj), collapse=" x "), "\n")
-  } else {
-    cat("[SHAP] shap_obj has no dim()\n")
+  # set rownames
+  if (is.null(sample_names)) {
+    sample_names <- rownames(X)
+  }
+  if (!is.null(sample_names)) {
+    rownames(shap) <- sample_names
+    names(bias) <- sample_names
   }
 
-  cat("[SHAP] colnames head:\n")
-  try(print(head(colnames(shap_obj))), silent = TRUE)
+  # Ensure feature names match X
+  if (!is.null(colnames(X_mat))) {
+    colnames(shap) <- colnames(X_mat)
+  }
 
-  cat("[SHAP] names() is NULL?:", is.null(names(shap_obj)), "\n")
-  cat("[SHAP] colnames() is NULL?:", is.null(colnames(shap_obj)), "\n")
+  # importance table
+  vals <- apply(shap, 2, function(x) sum(abs(x), na.rm = TRUE))
+  contrib <- tibble::tibble(
+    term = colnames(shap),
+    value = as.numeric(vals)
+  ) %>% dplyr::arrange(dplyr::desc(.data$value))
 
-  cat("[SHAP] head(names()):\n")
-  try(print(utils::head(names(shap_obj))), silent = TRUE)
+  pos_terms <- contrib %>% dplyr::filter(.data$value > 0) %>% dplyr::pull(.data$term)
 
-  cat("[SHAP] head(colnames()):\n")
-  try(print(utils::head(colnames(shap_obj))), silent = TRUE)
-
-  cat("[SHAP] identical(names, colnames)?:",
-      isTRUE(identical(names(shap_obj), colnames(shap_obj))), "\n")
-
-  cat("[SHAP] typeof:", typeof(shap_obj), "\n")
-  cat("[SHAP] is.matrix:", is.matrix(shap_obj), "\n")
-  cat("[SHAP] is.data.frame:", is.data.frame(shap_obj), "\n")
-
-  cat("[SHAP] str(shap_obj) (top-level):\n")
-  try(utils::str(shap_obj, max.level = 2), silent = TRUE)
-
+  cat(sprintf("[SHAP] predcontrib phis dim: %d x %d\n", nrow(phis), ncol(phis)))
+  cat(sprintf("[SHAP] shap dim (no bias): %d x %d\n", nrow(shap), ncol(shap)))
+  cat("[SHAP] EXIT get_xgb_shap OK\n")
   flush.console()
 
-  cat("[SHAP] any BIAS column?:",
-      if (!is.null(colnames(shap_obj))) any(colnames(shap_obj) == "BIAS") else "NO COLNAMES",
-      "\n")
-
-  flush.console()
-
-  # Now instrument the contrib block separately
-  contrib <- tryCatch({
-
-    cat("[SHAP] computing contrib tibble\n")
-    flush.console()
-
-    cat("[SHAP] contrib inputs:",
-      "length(names)=", length(names(shap_obj)),
-      "ncol=", if (!is.null(dim(shap_obj))) ncol(shap_obj) else NA,
-      "\n")
-    flush.console()
-    
-    tibble::tibble(
-      term = names(shap_obj),
-      value = apply(shap_obj, MARGIN = 2, FUN = function(x) sum(abs(x)))
-    ) %>%
-      dplyr::arrange(dplyr::desc(value))
-
-  }, error = function(e) {
-
-    cat("[SHAP] ERROR inside contrib block\n")
-    cat("[SHAP] conditionMessage:", conditionMessage(e), "\n")
-
-    cat("[SHAP] traceback():\n")
-    try(print(utils::capture.output(traceback())), silent = TRUE)
-
-    cat("[SHAP] sys.calls():\n")
-    try(print(utils::capture.output(sys.calls())), silent = TRUE)
-
-    flush.console()
-
-    stop(e)
-  })
-
-  nonzero_terms <- contrib %>%
-    dplyr::filter(value > 0) %>%
-    dplyr::pull(term)
-
-  shap_obj <- shap_obj %>% as.data.frame()
-  rownames(shap_obj) <- rownames(data)
-
-  shap_output <- list()
-  shap_output$shap_values = shap_obj
-  shap_output$shap_table = contrib
-  shap_output$good_terms = nonzero_terms
-
-  cat("[SHAP] EXIT get_xgb_shap\n")
-  flush.console()
-
-  return(shap_output)
+  return(list(
+    shap_values = shap,
+    bias = bias,
+    shap_table = contrib,
+    good_terms = pos_terms
+  ))
 }
 
   
@@ -747,7 +622,11 @@ get_xgb_shap <- function(model, data){
     flush.console()
     
     # Get feature contributions                                                                          
-    shap <- get_xgb_shap(last_model, model_data$original_data)
+    X_feat <- model_data$original_data %>%
+      dplyr::select(-"y_value", -"response") %>%
+      as.matrix()
+
+    shap <- get_xgb_shap(last_model, X_feat, sample_names = rownames(model_data$original_data))
     
     
     # Finish preparing outputs
@@ -759,8 +638,9 @@ get_xgb_shap <- function(model, data){
     output$feature_contribution <- shap$shap_table
     output$important_features <- shap$good_terms
     output$shap_values <- shap$shap_values
+    output$shap_bias <- shap$bias
     output$sample_names <- rownames(model_data$original_data)
-    output$feature_names <- setdiff(colnames(model_data$original_data),c("y_value","response"))
+    output$feature_names <- colnames(X_feat)
     
     # Clean up
     rm(last_model)
@@ -801,7 +681,7 @@ get_xgb_shap <- function(model, data){
 #' @param skip_eval Default = FALSE. If TRUE, k-fold CV will not be conducted and instead all models will be pushed to the next stage.
 #' @param use_gpu Default = TRUE. Set to FALSE if using CPU.
 #' @keywords model
-#' @import xgboost purrr fastshap
+#' @import xgboost purrr
 #' @import dplyr tibble glue lubridate rsample magrittr
 #' @export
 #' @examples
@@ -859,7 +739,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost purrr fastshap glue lubridate rsample
+#' @import xgboost purrr glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models_and_save(my_data, c("ko_ctnnb1","ko_myod1"))
@@ -880,7 +760,6 @@ fit_models_and_save <- function(perturbs, chunk_indx,
   library(lubridate)
   library(rsample)
   library(xgboost)
-  library(fastshap)
   
   if (is.null(path)) path = "."
   
@@ -944,7 +823,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost future fastshap glue lubridate rsample
+#' @import xgboost future glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models_in_parallel(my_data, c("ko_ctnnb1","ko_myod1"))
@@ -1008,7 +887,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
 #' @param seed Random seed
 #' @param path Folder path (e.g. "/home/test/models") to save models in.
 #' @keywords model
-#' @import xgboost purrr furrr future fastshap glue lubridate rsample
+#' @import xgboost purrr furrr future glue lubridate rsample
 #' @export
 #' @examples
 #' fit_models(my_data, c("ko_ctnnb1","ko_myod1"))
