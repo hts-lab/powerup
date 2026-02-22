@@ -513,7 +513,7 @@ powerup_train_models <- function(
   # Defaults for make_xgb_model()
   response_cutoff = 0.75,
   decreasing = FALSE,
-  weight_cap = 0.05,
+  weight_cap = 0,
   nfolds = 3,
   nrepeats = 3,
   nrounds = 100,
@@ -592,7 +592,7 @@ powerup_train_models <- function(
 
   # We train each model and write artifacts per modelKey
   total <- length(model_keys)
-  
+
   for (i in seq_along(model_keys)) {
     mk <- model_keys[[i]]
     perturbation <- key_map$perturbation[key_map$modelKey == mk][[1]]

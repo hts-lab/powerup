@@ -38,7 +38,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             cor_data = NULL, cor_n_features = 1000,
                             use_gpu = TRUE, gpu_id = 0){
   
-  cat(glue::glue("[{lubridate::now('US/Eastern')}] Training a model for {perturbation} ({indx} of {total}) .."))
+  cat(glue::glue("[{lubridate::now('America/New_York')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
   
   
@@ -109,6 +109,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   # Ideally this is tuning the parameters but we skip this for now
   prepare_model_params <- function(data, xgb_params){
     
+    if (is.null(xgb_params)) xgb_params <- list()
+
     params <- list()
     params$booster <- "gbtree"
     params$objective <- "reg:squarederror"
@@ -208,7 +210,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   get_xgb_shap <- function(model, data){
     
     pfun <- function(object, newdata) {
-      predict(object, newdata = newdata)
+      predict(object, xgboost::xgb.DMatrix(newdata))
     }
     
     shap_obj <- fastshap::explain(model, 
@@ -421,19 +423,38 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     #validation_matrices <- map(validation_matrices, get_DMatrix)
     
     # Use the analysis subsets for creating a model, then use the assessment subset to make predictions and calculate correlation
-    score_models <- purrr::map(training_matrices, xgboost::xgboost, 
-                        params = model_params,
-                        max_depth = max_depth,
-                        subsample = f_subsample,
-                        nthread = n_threads,
-                        max_bin = 64,
-                        tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
-                        gpu_id = gpu_id,
-                        nrounds = nrounds,
-                        early_stopping_rounds = 10, 
-                        verbose = 0)
+    # Build a stable params list for xgb.train()
+    cv_params <- model_params
+    cv_params$max_depth <- max_depth
+    cv_params$subsample <- f_subsample
+    cv_params$nthread <- n_threads
+    cv_params$max_bin <- 64
+    cv_params$tree_method <- if (use_gpu) "gpu_hist" else "auto"
+    if (use_gpu) cv_params$gpu_id <- gpu_id
+
+    score_models <- purrr::map2(
+      training_matrices, validation_matrices,
+      function(dtrain, dval) {
+        xgboost::xgb.train(
+          params = cv_params,
+          data = dtrain,
+          nrounds = nrounds,
+          watchlist = list(train = dtrain, eval = dval),
+          early_stopping_rounds = 10,
+          verbose = 0
+        )
+      }
+    )
     
-    score_predictions <-  score_models %>% purrr::map2(validation_matrices, predict)
+    pred_best <- function(model, dmat) {
+      bi <- model$best_iteration
+      if (!is.null(bi) && !is.na(bi)) {
+        return(predict(model, dmat, iterationrange = c(0, bi)))
+      }
+      predict(model, dmat)
+    }
+
+    score_predictions <-  purrr::map2(score_models, validation_matrices, pred_best)
     
     scores <- score_predictions %>% purrr::map2(validation_y_values, get_pseudo_cor) %>% unlist()
     
@@ -511,17 +532,23 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     last_validation <- get_DMatrix(model_data$original_data)
     
     # We fit a last model
-    last_model <- xgboost::xgboost(data = last_matrix, 
-                          params = last_params, 
-                          max_depth = max_depth,
-                          subsample = f_subsample,
-                          nthread = n_threads,
-                          max_bin = 64,
-                          tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
-                          gpu_id = gpu_id,
-                          nrounds = last_nrounds, 
-                          early_stopping_rounds = 10, verbose = 0)
-    
+    final_params <- last_params
+    final_params$max_depth <- max_depth
+    final_params$subsample <- f_subsample
+    final_params$nthread <- n_threads
+    final_params$max_bin <- 64
+    final_params$tree_method <- if (use_gpu) "gpu_hist" else "auto"
+    if (use_gpu) final_params$gpu_id <- gpu_id
+
+    last_model <- xgboost::xgb.train(
+      params = final_params,
+      data = last_matrix,
+      nrounds = last_nrounds,
+      watchlist = list(train = last_matrix, eval = last_validation),
+      early_stopping_rounds = 10,
+      verbose = 0
+    )
+        
     # We collect the predictions on the same data
     last_predictions <- predict(last_model, newdata = last_validation)
     names(last_predictions) <- rownames(model_data$original_data)
@@ -537,16 +564,22 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                               label = errors^2)
     
     # Fit a model on error (using default params)
-    error_model <- xgboost::xgboost(data = error_data, params = last_params,
-                           max_depth = max_depth,
-                           subsample = f_subsample,
-                           nrounds = last_nrounds, early_stopping_rounds = 10, 
-                           max_bin = 64,
-                           nthread = n_threads,
-                           tree_method = dplyr::if_else(use_gpu,"gpu_hist","auto"),
-                           gpu_id = gpu_id,
-                           verbose = 0) 
-    
+    err_params <- last_params
+    err_params$max_depth <- max_depth
+    err_params$subsample <- f_subsample
+    err_params$nthread <- n_threads
+    err_params$max_bin <- 64
+    err_params$tree_method <- if (use_gpu) "gpu_hist" else "auto"
+    if (use_gpu) err_params$gpu_id <- gpu_id
+
+    error_model <- xgboost::xgb.train(
+      params = err_params,
+      data = error_data,
+      nrounds = last_nrounds,
+      watchlist = list(train = error_data),
+      verbose = 0
+    )
+        
     cat(glue::glue(" E = +/- {round(1.96*sqrt(mean(errors^2,na.rm=T)),3)}"), sep = "\n")
     flush.console()
     
