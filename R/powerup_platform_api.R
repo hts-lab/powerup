@@ -1,4 +1,4 @@
-# powerup_platform_api.R
+# R/powerup_platform_api.R
 
 #' POWERUP platform API (Cloud Run + standalone)
 #'
