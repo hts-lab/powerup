@@ -566,10 +566,17 @@ powerup_train_models <- function(
     filter(.data$modelKey %in% model_keys) %>%
     select(.data$modelKey, .data$perturbation)
 
+  # Sanity check: all model_keys must be present in perturbations.csv mapping
   if (nrow(key_map) != length(model_keys)) {
     missing <- setdiff(model_keys, key_map$modelKey)
     stop(glue("Some modelKeys missing in perturbations.csv: {paste(missing, collapse=', ')}"))
   }
+
+  # Reorder key_map to match order of model_keys input (for deterministic processing downstream)
+  key_map <- key_map %>%
+    mutate(.order = match(.data$modelKey, model_keys)) %>%
+    arrange(.data$.order) %>%
+    select(-.data$.order)
 
   # Check perturbation values look sane
   if (any(is.na(key_map$perturbation) | trimws(key_map$perturbation) == "")) {
@@ -631,8 +638,8 @@ powerup_train_models <- function(
   total <- length(model_keys)
 
   for (i in seq_along(model_keys)) {
-    mk <- model_keys[[i]]
-    perturbation <- key_map$perturbation[key_map$modelKey == mk][[1]]
+    mk <- key_map$modelKey[[i]]
+    perturbation <- key_map$perturbation[[i]]
 
     model_out_dir <- file.path(out_models_dir, mk)
     powerup_dir_create(model_out_dir)

@@ -1,6 +1,6 @@
 Package: powerup
 Title: POWERUP: Predictive Oncology Workflow for Expression-driven taRgets in Underpowered Patient cohorts
-Version: 0.1.1.0003
+Version: 0.1.1.0004
 Authors@R: 
     person(given = "Mushriq",
            family = "Al-Jazrawe",
