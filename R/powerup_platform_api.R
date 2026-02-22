@@ -827,315 +827,200 @@ powerup_train_models <- function(
 }
 
 # ---- CONTRACT 3: finalize ----
+# Aggregates model-level metrics.json into a single model_status.csv.
+# Shard-agnostic and local-only.
+# Expects:
+#   - out_preprocess_dir contains perturbations.csv (written by powerup_preprocess)
+#   - models_dir contains models/<modelKey>/metrics.json (may be missing for some models)
 #' @export
-powerup_finalize <- function(shard_manifests_dir, out_aggregates_dir, job_id) {
+powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir, job_id) {
   powerup_dir_create(out_aggregates_dir)
 
-  if (!is.character(shard_manifests_dir) || length(shard_manifests_dir) != 1 || nchar(shard_manifests_dir) < 1) {
-    stop("shard_manifests_dir must be a non-empty string")
-  }
-  if (!dir.exists(shard_manifests_dir)) {
-    stop(glue("[powerup][jobId={job_id}] shard_manifests_dir does not exist: {shard_manifests_dir}"))
-  }
+  .pu_assert_file_exists(out_preprocess_dir, "out_preprocess_dir")
+  if (!dir.exists(out_preprocess_dir)) stop(glue("out_preprocess_dir is not a directory: {out_preprocess_dir}"))
 
-  # Your actual layout:
-  #   <output_root>/shards/...
-  #   <output_root>/models/<modelKey>/metrics.json
-  output_root <- dirname(shard_manifests_dir)
-  models_dir  <- file.path(output_root, "models")
+  .pu_assert_file_exists(models_dir, "models_dir")
+  if (!dir.exists(models_dir)) stop(glue("models_dir is not a directory: {models_dir}"))
 
-  message(glue("[powerup][jobId={job_id}] FINALIZE start"))
-  message(glue("[powerup][jobId={job_id}] shards_dir={shard_manifests_dir}"))
-  message(glue("[powerup][jobId={job_id}] models_dir={models_dir}"))
-  message(glue("[powerup][jobId={job_id}] out_aggregates_dir={out_aggregates_dir}"))
+  perturbations_path <- file.path(out_preprocess_dir, "perturbations.csv")
+  .pu_assert_file_exists(perturbations_path, "perturbations.csv (in out_preprocess_dir)")
 
-  # -----------------------------
-  # Helpers
-  # -----------------------------
-  `%||%` <- function(x, y) {
-    if (is.null(x) || length(x) == 0) return(y)
-    if (is.character(x) && length(x) == 1 && !nzchar(x)) return(y)
-    x
-  }
+  message(glue(
+    "[powerup][jobId={job_id}] FINALIZE start preprocess_dir={out_preprocess_dir} models_dir={models_dir} out={out_aggregates_dir}"
+  ))
 
-  rel_to_output <- function(p) {
-    # Produce paths relative to output_root so they line up with:
-    # jobs/<jobId>/output/<...>
-    root <- tryCatch(normalizePath(output_root, winslash = "/", mustWork = TRUE), error = function(e) output_root)
-    pp   <- tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
-    root2 <- if (grepl("/$", root)) root else paste0(root, "/")
+  `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
-    if (startsWith(pp, root2)) {
-      sub(paste0("^", gsub("([\\^\\$\\.|\\(\\)\\[\\]\\*\\+\\?\\\\])", "\\\\\\1", root2)), "", pp)
-    } else {
-      pp
-    }
-  }
+  # ---- Source of truth: expected models + perturbation names ----
+  pert_tbl <- readr::read_csv(perturbations_path, show_col_types = FALSE, progress = FALSE)
+  if (!("modelKey" %in% names(pert_tbl))) stop("perturbations.csv must contain column: modelKey")
+  if (!("perturbation" %in% names(pert_tbl))) stop("perturbations.csv must contain column: perturbation")
 
-  safe_read_json <- function(path) {
-    tryCatch(
-      jsonlite::fromJSON(path, simplifyVector = TRUE),
-      error = function(e) {
-        list(
-          .parse_error = list(
-            class = "JsonParseError",
-            message = conditionMessage(e)
-          )
-        )
-      }
-    )
-  }
+  pert_tbl <- pert_tbl %>%
+    dplyr::mutate(
+      modelKey = as.character(.data$modelKey),
+      perturbation = as.character(.data$perturbation)
+    ) %>%
+    dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
+    dplyr::distinct(.data$modelKey, .keep_all = TRUE) %>%
+    dplyr::arrange(.data$modelKey)
 
-  # -----------------------------
-  # 1) Read shard manifests (optional but useful)
-  # -----------------------------
-  shard_manifest_files <- list.files(
-    shard_manifests_dir,
-    pattern = "^manifest\\.json$",
-    recursive = TRUE,
-    full.names = TRUE
-  )
-  shard_manifest_files <- sort(shard_manifest_files)
+  if (nrow(pert_tbl) < 1) stop(glue("[powerup][jobId={job_id}] perturbations.csv has 0 valid modelKey rows"))
 
-  shard_models_tbl <- tibble::tibble()
-  if (length(shard_manifest_files) > 0) {
-    shard_rows <- list()
+  message(glue("[powerup][jobId={job_id}] FINALIZE expected models={nrow(pert_tbl)}"))
 
-    for (mf in shard_manifest_files) {
-      man <- safe_read_json(mf)
-      shard_index <- suppressWarnings(as.integer(man$shardIndex %||% NA_integer_))
-      shard_id <- basename(dirname(mf))  # e.g. shard_0
+  # Deterministic platform paths (still OK in fully local runs as "intended locations")
+  gcs_prefix <- glue("jobs/{job_id}/output/models")
 
-      # man$models is list of models with status/error/artifacts
-      if (!is.null(man$models) && length(man$models) > 0) {
-        for (m in man$models) {
-          shard_rows[[length(shard_rows) + 1L]] <- tibble::tibble(
-            modelKey = as.character(m$modelKey %||% NA_character_),
-            shardIndex = shard_index,
-            shardId = as.character(shard_id),
-            shardStatus = as.character(m$status %||% NA_character_),
-            shardErrorType = as.character((m$error$class %||% NA_character_)),
-            shardErrorMessage = as.character((m$error$message %||% NA_character_)),
-            shardManifestPath = rel_to_output(mf)
-          )
-        }
-      }
-    }
+  # ---- Discover local metrics.json ----
+  metric_files <- list.files(models_dir, pattern = "^metrics\\.json$", recursive = TRUE, full.names = TRUE)
+  metric_files <- sort(unique(metric_files))
 
-    shard_models_tbl <- dplyr::bind_rows(shard_rows) %>%
-      dplyr::filter(!is.na(.data$modelKey) & nzchar(.data$modelKey)) %>%
-      dplyr::arrange(.data$modelKey, .data$shardIndex, .data$shardManifestPath)
-  } else {
-    message(glue("[powerup][jobId={job_id}] FINALIZE: no shard manifest.json found under shards_dir"))
-  }
+  metrics_map <- tibble::tibble(
+    metricsFile = metric_files,
+    modelKey = if (length(metric_files) > 0) basename(dirname(metric_files)) else character(0)
+  ) %>%
+    dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
+    dplyr::arrange(.data$modelKey, .data$metricsFile) %>%
+    dplyr::group_by(.data$modelKey) %>%
+    dplyr::summarise(metricsFile = dplyr::first(.data$metricsFile), .groups = "drop")
 
-  # -----------------------------
-  # 2) Read per-model metrics.json from models_dir
-  # -----------------------------
-  metrics_files <- character(0)
-  if (dir.exists(models_dir)) {
-    metrics_files <- list.files(
-      models_dir,
-      pattern = "^metrics\\.json$",
-      recursive = TRUE,
-      full.names = TRUE
-    )
-  }
-  metrics_files <- sort(metrics_files)
+  message(glue("[powerup][jobId={job_id}] FINALIZE discovered metrics.json={nrow(metrics_map)}"))
 
-  if (length(metrics_files) < 1) {
-    message(glue("[powerup][jobId={job_id}] FINALIZE: found 0 metrics.json under models_dir={models_dir}"))
-    # Still emit empty artifacts deterministically
-    empty <- tibble::tibble(
-      jobId = character(0),
-      modelKey = character(0),
-      perturbation = character(0),
-      status = character(0),
-      errorType = character(0),
-      errorMessage = character(0),
-      mean_r = numeric(0),
-      mean_r2 = numeric(0),
-      mean_rmse = numeric(0),
-      n_scores = integer(0),
-      skipped = logical(0),
-      metricsPath = character(0),
-      predTestPath = character(0),
-      predUserPath = character(0),
-      shapUserPath = character(0),
-      shardIndex = integer(0),
-      shardId = character(0),
-      shardStatus = character(0),
-      shardErrorType = character(0),
-      shardErrorMessage = character(0),
-      shardManifestPath = character(0)
-    )
-    readr::write_csv(empty, file.path(out_aggregates_dir, "model_status.csv"))
-
-    manifest <- list(
-      schemaVersion = 1,
-      jobId = job_id,
-      createdAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
-      inputs = list(
-        shardsDir = rel_to_output(shard_manifests_dir),
-        modelsDir = rel_to_output(models_dir)
-      ),
-      counts = list(
-        totalModels = 0L,
-        ok = 0L,
-        skipped = 0L,
-        failed = 0L
-      ),
-      artifacts = list(
-        modelStatusCsv = "model_status.csv"
-      )
-    )
-    powerup_write_json(file.path(out_aggregates_dir, "manifest.json"), manifest)
-    message(glue("[powerup][jobId={job_id}] FINALIZE done (empty)"))
-    return(invisible(TRUE))
-  }
-
-  rows <- vector("list", length(metrics_files))
-
-  for (i in seq_along(metrics_files)) {
-    mpath <- metrics_files[[i]]
-    model_dir <- dirname(mpath)
-
-    # modelKey is the folder name in your layout
-    model_key_guess <- basename(model_dir)
-
-    pred_test_path <- file.path(model_dir, "pred_test.csv")
-    pred_user_path <- file.path(model_dir, "pred_user.csv")
-    shap_user_path <- file.path(model_dir, "shap_user.csv")
-
-    parsed <- safe_read_json(mpath)
-
-    # Defaults
-    job_id_m <- job_id
-    model_key <- model_key_guess
-    perturbation <- NA_character_
+  parse_metrics <- function(path, fallback_model_key, fallback_perturbation) {
+    jobId_m <- job_id
+    perturbation <- fallback_perturbation
     mean_r <- NA_real_
     mean_r2 <- NA_real_
     mean_rmse <- NA_real_
     n_scores <- 0L
     skipped <- TRUE
-    error_type <- NA_character_
-    error_message <- NA_character_
+    errorType <- NA_character_
+    errorMessage <- NA_character_
 
-    # Handle parse error wrapper
-    if (!is.null(parsed$.parse_error)) {
-      error_type <- parsed$.parse_error$class %||% "JsonParseError"
-      error_message <- parsed$.parse_error$message %||% "Failed to parse metrics.json"
-      skipped <- TRUE
+    txt <- tryCatch(readLines(path, warn = FALSE), error = function(e) NULL)
+    if (is.null(txt) || length(txt) == 0) {
+      errorType <- "LocalReadError"
+      errorMessage <- glue("Could not read file: {path}")
     } else {
-      if (!is.null(parsed$jobId)) job_id_m <- as.character(parsed$jobId)
-      if (!is.null(parsed$modelKey)) model_key <- as.character(parsed$modelKey)
-      if (!is.null(parsed$perturbation)) perturbation <- as.character(parsed$perturbation)
+      obj <- tryCatch(
+        jsonlite::fromJSON(paste(txt, collapse = "\n"), simplifyVector = TRUE),
+        error = function(e) {
+          errorType <<- "JsonParseError"
+          errorMessage <<- conditionMessage(e)
+          NULL
+        }
+      )
 
-      if (!is.null(parsed$mean_r)) mean_r <- as.numeric(parsed$mean_r)
-      if (!is.null(parsed$mean_r2)) mean_r2 <- as.numeric(parsed$mean_r2)
-      if (!is.null(parsed$mean_rmse)) mean_rmse <- as.numeric(parsed$mean_rmse)
-      if (!is.null(parsed$n_scores)) n_scores <- as.integer(parsed$n_scores)
-      if (!is.null(parsed$skipped)) skipped <- isTRUE(parsed$skipped)
+      if (!is.null(obj)) {
+        jobId_m <- as.character(obj$jobId %||% job_id)
+        perturbation <- as.character(obj$perturbation %||% fallback_perturbation)
 
-      if (!is.null(parsed$error)) {
-        error_type <- as.character(parsed$error$class %||% NA_character_)
-        error_message <- as.character(parsed$error$message %||% NA_character_)
+        mean_r <- suppressWarnings(as.numeric(obj$mean_r %||% NA_real_))
+        mean_r2 <- suppressWarnings(as.numeric(obj$mean_r2 %||% NA_real_))
+        mean_rmse <- suppressWarnings(as.numeric(obj$mean_rmse %||% NA_real_))
+        n_scores <- suppressWarnings(as.integer(obj$n_scores %||% 0L))
+        skipped <- isTRUE(obj$skipped %||% FALSE)
+
+        if (!is.null(obj$error)) {
+          errorType <- as.character(obj$error$class %||% NA_character_)
+          errorMessage <- as.character(obj$error$message %||% NA_character_)
+        }
       }
     }
 
-    # Determine status (model-level)
     status <- "OK"
-    if (!is.na(error_type) || !is.na(error_message)) {
+    if (!is.na(errorType) || !is.na(errorMessage)) {
       status <- "FAILED"
     } else if (isTRUE(skipped)) {
       status <- "SKIPPED"
-    } else {
-      status <- "OK"
     }
 
-    rows[[i]] <- tibble::tibble(
-      jobId = as.character(job_id_m),
-      modelKey = as.character(model_key),
-      perturbation = as.character(perturbation),
+    model_dir_gcs <- glue("{gcs_prefix}/{fallback_model_key}")
+
+    tibble::tibble(
+      jobId = jobId_m,
+      modelKey = fallback_model_key,
+      perturbation = perturbation,
       status = status,
-      errorType = as.character(error_type),
-      errorMessage = as.character(error_message),
+      skipped = isTRUE(skipped),
       mean_r = mean_r,
       mean_r2 = mean_r2,
       mean_rmse = mean_rmse,
       n_scores = n_scores,
-      skipped = isTRUE(skipped),
-      metricsPath = rel_to_output(mpath),
-      predTestPath = rel_to_output(pred_test_path),
-      predUserPath = rel_to_output(pred_user_path),
-      shapUserPath = rel_to_output(shap_user_path)
+      errorType = errorType,
+      errorMessage = errorMessage,
+      metricsPath = glue("{model_dir_gcs}/metrics.json"),
+      predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
+      predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
+      shapUserPath = glue("{model_dir_gcs}/shap_user.csv")
     )
   }
 
-  model_status <- dplyr::bind_rows(rows)
+  base <- pert_tbl %>%
+    dplyr::select(.data$modelKey, .data$perturbation) %>%
+    dplyr::left_join(metrics_map, by = "modelKey")
 
-  # 3) Left-join shard info (if available) so you can cross-check
-  if (nrow(shard_models_tbl) > 0) {
-    # If duplicates exist (shouldn't, but just in case), keep the first deterministic row
-    shard_models_tbl <- shard_models_tbl %>%
-      dplyr::group_by(.data$modelKey) %>%
-      dplyr::slice(1) %>%
-      dplyr::ungroup()
+  rows <- vector("list", nrow(base))
 
-    model_status <- model_status %>%
-      dplyr::left_join(shard_models_tbl, by = "modelKey")
-  } else {
-    model_status <- model_status %>%
-      dplyr::mutate(
-        shardIndex = NA_integer_,
-        shardId = NA_character_,
-        shardStatus = NA_character_,
-        shardErrorType = NA_character_,
-        shardErrorMessage = NA_character_,
-        shardManifestPath = NA_character_
+  for (i in seq_len(nrow(base))) {
+    mk <- base$modelKey[[i]]
+    pert <- base$perturbation[[i]]
+    mf <- base$metricsFile[[i]]
+
+    model_dir_gcs <- glue("{gcs_prefix}/{mk}")
+
+    if (is.na(mf) || !nzchar(mf) || !file.exists(mf)) {
+      rows[[i]] <- tibble::tibble(
+        jobId = job_id,
+        modelKey = mk,
+        perturbation = pert,
+        status = "MISSING_METRICS",
+        skipped = TRUE,
+        mean_r = NA_real_,
+        mean_r2 = NA_real_,
+        mean_rmse = NA_real_,
+        n_scores = 0L,
+        errorType = "MissingMetrics",
+        errorMessage = "metrics.json not found locally for this modelKey",
+        metricsPath = glue("{model_dir_gcs}/metrics.json"),
+        predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
+        predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
+        shapUserPath = glue("{model_dir_gcs}/shap_user.csv")
       )
+    } else {
+      rows[[i]] <- parse_metrics(mf, fallback_model_key = mk, fallback_perturbation = pert)
+    }
   }
 
-  # Deterministic ordering
-  model_status <- model_status %>%
-    dplyr::arrange(.data$modelKey, .data$metricsPath)
+  model_status <- dplyr::bind_rows(rows) %>%
+    dplyr::arrange(.data$modelKey)
 
   out_csv <- file.path(out_aggregates_dir, "model_status.csv")
   readr::write_csv(model_status, out_csv)
 
-  # 4) Aggregated manifest
-  total_models <- nrow(model_status)
+  total <- nrow(model_status)
   n_ok <- sum(model_status$status == "OK")
   n_skipped <- sum(model_status$status == "SKIPPED")
   n_failed <- sum(model_status$status == "FAILED")
+  n_missing <- sum(model_status$status == "MISSING_METRICS")
 
-  manifest <- list(
+  powerup_write_json(file.path(out_aggregates_dir, "manifest.json"), list(
     schemaVersion = 1,
     jobId = job_id,
     createdAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
-    inputs = list(
-      shardsDir = rel_to_output(shard_manifests_dir),
-      modelsDir = rel_to_output(models_dir)
-    ),
     counts = list(
-      totalModels = as.integer(total_models),
-      ok = as.integer(n_ok),
-      skipped = as.integer(n_skipped),
-      failed = as.integer(n_failed)
+      totalModels = total,
+      ok = n_ok,
+      skipped = n_skipped,
+      failed = n_failed,
+      missingMetrics = n_missing
     ),
     artifacts = list(
       modelStatusCsv = "model_status.csv"
     )
-  )
-  powerup_write_json(file.path(out_aggregates_dir, "manifest.json"), manifest)
-
-  message(glue(
-    "[powerup][jobId={job_id}] FINALIZE done total={total_models} ok={n_ok} skipped={n_skipped} failed={n_failed} out={out_csv}"
   ))
 
+  message(glue("[powerup][jobId={job_id}] FINALIZE done total={total} ok={n_ok} skipped={n_skipped} failed={n_failed} missingMetrics={n_missing}"))
   invisible(TRUE)
 }
-
-
-# helper: infix %||% for fallback
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && length(x) == 1 && !nzchar(x))) y else x
