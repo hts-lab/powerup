@@ -394,11 +394,49 @@ powerup_preprocess <- function(
   perturbations <- setdiff(colnames(response_df), "cell_line")
   if (length(perturbations) < 1) stop(glue("[powerup][jobId={job_id}] response_df has no perturbation columns"))
 
+  # ---- Optional perturbation selection (targets)
+  # targets can be:
+  #   - NULL: use all perturbations
+  #   - single numeric (or numeric-like string): take first N perturbations (after sort)
+  #   - character vector: explicit allowlist of perturbation names
   if (!is.null(targets)) {
-    if (!is.character(targets) || length(targets) < 1) stop(glue("[powerup][jobId={job_id}] targets must be non-empty character vector"))
-    unknown <- setdiff(targets, perturbations)
-    if (length(unknown) > 0) stop(glue("[powerup][jobId={job_id}] targets contains unknown perturbations: {paste(head(unknown,25), collapse=', ')}"))
-    perturbations <- targets
+
+    # Case A: numeric (or numeric-like string) => take first N
+    if (is.numeric(targets) && length(targets) == 1) {
+      n <- as.integer(targets)
+      if (is.na(n) || n < 1) stop(glue("[powerup][jobId={job_id}] targets numeric must be >= 1"))
+      perturbations <- sort(perturbations)
+      if (n < length(perturbations)) {
+        perturbations <- perturbations[seq_len(n)]
+      }
+      message(glue("[powerup][jobId={job_id}] targets numeric slice: n={n} => perturbations_used={length(perturbations)}"))
+    } else if (is.character(targets) && length(targets) == 1 && grepl("^[0-9]+$", trimws(targets))) {
+      n <- as.integer(trimws(targets))
+      if (is.na(n) || n < 1) stop(glue("[powerup][jobId={job_id}] targets numeric-string must be >= 1"))
+      perturbations <- sort(perturbations)
+      if (n < length(perturbations)) {
+        perturbations <- perturbations[seq_len(n)]
+      }
+      message(glue("[powerup][jobId={job_id}] targets numeric-string slice: n={n} => perturbations_used={length(perturbations)}"))
+
+    # Case B: explicit allowlist vector
+    } else {
+      if (!is.character(targets) || length(targets) < 1) {
+        stop(glue("[powerup][jobId={job_id}] targets must be NULL, a single number, or a character vector of perturbation names"))
+      }
+      targets <- unique(trimws(targets))
+      targets <- targets[nzchar(targets)]
+      if (length(targets) < 1) stop(glue("[powerup][jobId={job_id}] targets resolved to empty list after trimming"))
+
+      unknown <- setdiff(targets, perturbations)
+      if (length(unknown) > 0) {
+        stop(glue("[powerup][jobId={job_id}] targets contains unknown perturbations: {paste(head(unknown,25), collapse=', ')}"))
+      }
+
+      # Keep deterministic ordering: sort
+      perturbations <- sort(targets)
+      message(glue("[powerup][jobId={job_id}] targets explicit allowlist: perturbations_used={length(perturbations)}"))
+    }
   }
 
   # Universe = cell_line overlap between gene_expression and response
