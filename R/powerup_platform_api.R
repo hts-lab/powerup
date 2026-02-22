@@ -94,50 +94,75 @@ powerup_write_json <- function(path, obj) {
   (x %% n) + 1L
 }
 
-.pu_build_split <- function(seed_int, response_u, perturbations, sensitive_cutoff, resistant_cutoff) {
+.pu_build_split <- function(
+  seed_int,
+  response_u,
+  perturbations,
+  sensitive_cutoff,
+  resistant_cutoff,
+  n_per_class = 1L  # set to 2L for "2 sensitive + 2 resistant" per perturbation
+) {
   test_set <- character(0)
   decisions <- vector("list", length(perturbations))
   names(decisions) <- perturbations
 
+  # Deterministic "pick the j-th candidate" without searching for unused replacements.
+  pick_k_no_replace <- function(cands, perturbation, klass, k, test_set) {
+    if (length(cands) == 0 || k <= 0) {
+      return(list(picks = character(0), attempted = character(0)))
+    }
+
+    # Deterministic anchor position
+    start <- .pu_hash_to_index(seed_int, perturbation, klass, length(cands))
+
+    # Deterministically define k attempts as:
+    # start, start+1, ..., start+k-1 (wrapping)
+    idx <- ((start - 1L + seq_len(k) - 1L) %% length(cands)) + 1L
+    attempted <- cands[idx]
+
+    # **NO REPLACEMENT POLICY**
+    # If an attempted pick is already in test_set, we DO NOT search for another.
+    picks <- attempted[!(attempted %in% test_set)]
+    list(picks = picks, attempted = attempted)
+  }
+
   for (p in perturbations) {
     y <- response_u[[p]]
 
-    # If you want exact parity with your historical script, use strict > and <.
-    # Here we keep inclusive thresholds by default.
     sens_ids <- response_u$cell_line[which(!is.na(y) & y >= sensitive_cutoff)]
     res_ids  <- response_u$cell_line[which(!is.na(y) & y <= resistant_cutoff)]
 
     sens_ids <- sort(unique(sens_ids))
     res_ids  <- sort(unique(res_ids))
 
-    pick_one <- function(cands, klass) {
-      if (length(cands) == 0) return(NA_character_)
-      start <- .pu_hash_to_index(seed_int, p, klass, length(cands))
-      for (k in seq_len(length(cands))) {
-        j <- ((start - 1L + (k - 1L)) %% length(cands)) + 1L
-        choice <- cands[[j]]
-        if (!(choice %in% test_set)) return(choice)
-      }
-      cands[[start]]
-    }
+    sens_out <- pick_k_no_replace(sens_ids, p, "sensitive", n_per_class, test_set)
+    if (length(sens_out$picks) > 0) test_set <- c(test_set, sens_out$picks)
 
-    sens_pick <- pick_one(sens_ids, "sensitive")
-    if (!is.na(sens_pick)) test_set <- c(test_set, sens_pick)
-
-    res_pick <- pick_one(res_ids, "resistant")
-    if (!is.na(res_pick)) test_set <- c(test_set, res_pick)
+    res_out <- pick_k_no_replace(res_ids, p, "resistant", n_per_class, test_set)
+    if (length(res_out$picks) > 0) test_set <- c(test_set, res_out$picks)
 
     decisions[[p]] <- list(
       nSensitive = length(sens_ids),
       nResistant = length(res_ids),
-      pickedSensitive = sens_pick,
-      pickedResistant = res_pick
+
+      # what we tried to pick (deterministic)
+      attemptedSensitive = sens_out$attempted,
+      attemptedResistant = res_out$attempted,
+
+      # what actually got added (after "already in test_set" skipping)
+      pickedSensitive = sens_out$picks,
+      pickedResistant = res_out$picks
     )
   }
 
   test_set <- sort(unique(test_set))
   all_ids <- sort(unique(response_u$cell_line))
   train_set <- setdiff(all_ids, test_set)
+
+  cat(sprintf(
+    "[powerup] split summary: nPerturbations=%d nAllIds=%d nTest=%d nTrain=%d nPerClass=%d\n",
+    length(perturbations), length(all_ids), length(test_set), length(train_set), as.integer(n_per_class)
+  ))
 
   if (length(test_set) < 2) stop("Split produced too small test set; check thresholds/data")
   if (length(train_set) < 10) stop("Split produced too small train set")
@@ -147,6 +172,7 @@ powerup_write_json <- function(path, obj) {
     seed = seed_int,
     sensitiveCutoff = sensitive_cutoff,
     resistantCutoff = resistant_cutoff,
+    nPerClass = as.integer(n_per_class),
     trainIds = train_set,
     testIds = test_set,
     perPerturbation = decisions
@@ -254,7 +280,8 @@ powerup_preprocess <- function(
     response_u = response_u,
     perturbations = perturbations,
     sensitive_cutoff = sensitive_cutoff,
-    resistant_cutoff = resistant_cutoff
+    resistant_cutoff = resistant_cutoff,
+    n_per_class = 2L
   )
 
   train_ids <- split$train_ids
