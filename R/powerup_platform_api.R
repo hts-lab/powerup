@@ -532,12 +532,35 @@ powerup_train_models <- function(
   powerup_dir_create(out_models_dir)
   set.seed(as.integer(seed))
 
+  # ---- Validate model_keys ----
+  if (is.null(model_keys) || length(model_keys) == 0) {
+    stop(glue("[powerup][jobId={job_id}] model_keys is empty"))
+  }
+  if (!is.character(model_keys)) {
+    stop(glue("[powerup][jobId={job_id}] model_keys must be a character vector"))
+  }
+  if (anyNA(model_keys) || any(trimws(model_keys) == "")) {
+    bad <- model_keys[is.na(model_keys) | trimws(model_keys) == ""]
+    stop(glue("[powerup][jobId={job_id}] model_keys contains NA/empty values: {paste(bad, collapse=', ')}"))
+  }
+  if (any(duplicated(model_keys))) {
+    dups <- unique(model_keys[duplicated(model_keys)])
+    stop(glue("[powerup][jobId={job_id}] model_keys contains duplicates: {paste(dups, collapse=', ')}"))
+  }
+
+  message(glue("[powerup][jobId={job_id}] Received {length(model_keys)} model_keys (sample: {paste(head(model_keys, 10), collapse=', ')})"))
+
+
   # ---- perturbations table is the mapping source of truth ----
   pert_tbl <- readr::read_csv(perturbations_path, show_col_types = FALSE, progress = FALSE)
+  message(glue("[powerup][jobId={job_id}] perturbations_path={perturbations_path}"))
+  message(glue("[powerup][jobId={job_id}] perturbations.csv rows={nrow(pert_tbl)} cols={ncol(pert_tbl)}"))
+  message(glue("[powerup][jobId={job_id}] perturbations.csv colnames={paste(names(pert_tbl), collapse=', ')}"))
   if (!("modelKey" %in% names(pert_tbl))) stop("perturbations.csv must contain column: modelKey")
   if (!("perturbation" %in% names(pert_tbl))) {
     stop("perturbations.csv must contain column: perturbation (maps modelKey -> dataset outcome column)")
   }
+
 
   key_map <- pert_tbl %>%
     filter(.data$modelKey %in% model_keys) %>%
@@ -547,6 +570,20 @@ powerup_train_models <- function(
     missing <- setdiff(model_keys, key_map$modelKey)
     stop(glue("Some modelKeys missing in perturbations.csv: {paste(missing, collapse=', ')}"))
   }
+
+  # Check perturbation values look sane
+  if (any(is.na(key_map$perturbation) | trimws(key_map$perturbation) == "")) {
+    bad <- key_map$modelKey[is.na(key_map$perturbation) | trimws(key_map$perturbation) == ""]
+    stop(glue("[powerup][jobId={job_id}] Some mapped perturbations are NA/empty for modelKeys: {paste(bad, collapse=', ')}"))
+  }
+
+  # Write a shard-level debug artifact so you can inspect exactly what was trained
+  debug_map_path <- file.path(out_models_dir, "_debug_key_map.csv")
+  readr::write_csv(key_map, debug_map_path)
+  message(glue("[powerup][jobId={job_id}] Wrote debug mapping: {debug_map_path}"))
+  message(glue("[powerup][jobId={job_id}] key_map sample:\n{paste(capture.output(print(utils::head(key_map, 10))), collapse='\n')}"))
+
+
 
   # ---- Split layout ONLY ----
   # NOTE: train_set_path/test_set_path/user_samples_path are retained for signature compatibility,
