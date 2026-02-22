@@ -592,7 +592,7 @@ powerup_train_models <- function(
 
   # We train each model and write artifacts per modelKey
   total <- length(model_keys)
-
+  
   for (i in seq_along(model_keys)) {
     mk <- model_keys[[i]]
     perturbation <- key_map$perturbation[key_map$modelKey == mk][[1]]
@@ -600,133 +600,184 @@ powerup_train_models <- function(
     model_out_dir <- file.path(out_models_dir, mk)
     powerup_dir_create(model_out_dir)
 
-    if (!(perturbation %in% colnames(out_train))) {
-      stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_train.csv"))
-    }
-    if (!(perturbation %in% colnames(out_test))) {
-      stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
-    }
+    # Per-model guardrails: never let a single failure kill the shard.
+    # We still write model artifacts with error details so the platform can proceed.
+    tryCatch({
 
-    # Build per-model dataset: outcome column + all features
-    train_df <- cbind(
-      setNames(as.data.frame(out_train[, perturbation, drop = FALSE]), perturbation),
-      feat_train
-    )
+      message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) start"))
 
-    test_df <- cbind(
-      setNames(as.data.frame(out_test[, perturbation, drop = FALSE]), perturbation),
-      feat_test
-    )
+      if (!(perturbation %in% colnames(out_train))) {
+        stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_train.csv"))
+      }
+      if (!(perturbation %in% colnames(out_test))) {
+        stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
+      }
 
-    # ---- Train Model ----
-    fit <- make_xgb_model(
-      perturbation = perturbation,
-      indx = i,
-      total = total,
-      dataset = train_df,
-      response_cutoff = response_cutoff,
-      decreasing = decreasing,
-      weight_cap = weight_cap,
-      nfolds = nfolds,
-      nrepeats = nrepeats,
-      nrounds = nrounds,
-      max_depth = max_depth,
-      f_subsample = f_subsample,
-      min_score = min_score,
-      skip_eval = skip_eval,
-      shuffle = shuffle,
-      n_threads = n_threads,
-      xgb_params = xgb_params,
-      cor_data = cor_data,
-      cor_n_features = cor_n_features,
-      use_gpu = use_gpu,
-      gpu_id = gpu_id
-    )
+      # Build per-model dataset: outcome column + all features
+      train_df <- cbind(
+        setNames(as.data.frame(out_train[, perturbation, drop = FALSE]), perturbation),
+        feat_train
+      )
 
-    # ---- Write Model Performance ----
-    # metrics.json
-    metrics <- list(
-      jobId = job_id,
-      modelKey = mk,
-      perturbation = perturbation,
-      mean_r = if (!is.null(fit$scores)) mean(fit$scores, na.rm = TRUE) else NA_real_,
-      mean_r2 = if (!is.null(fit$scores)) mean(fit$scores^2, na.rm = TRUE) else NA_real_,
-      mean_rmse = if (!is.null(fit$scores_rmse)) mean(fit$scores_rmse, na.rm = TRUE) else NA_real_,
-      n_scores = if (!is.null(fit$scores)) length(fit$scores) else 0L,
-      skipped = is.null(fit$model) # fit will only return a model if it passes min_score
-    )
-    powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
+      test_df <- cbind(
+        setNames(as.data.frame(out_test[, perturbation, drop = FALSE]), perturbation),
+        feat_test
+      )
 
-    # ---- Make Predictions ----
-    # pred_test.csv: predictions on held-out test set using the final trained model (if present).
-    # pred_user.csv: predictions on user's samples using the final trained model (if present).
-    # shap_user.csv: SHAP explanation values for user's sample predictions.
-    if (!is.null(fit$model)) {
-
-      # 1) Test predictions
-      fit_test <- make_new_data_predictions(
-        model = fit,
-        name = perturbation,
+      # ---- Train Model ----
+      fit <- make_xgb_model(
+        perturbation = perturbation,
         indx = i,
         total = total,
-        new_data = test_df
+        dataset = train_df,
+        response_cutoff = response_cutoff,
+        decreasing = decreasing,
+        weight_cap = weight_cap,
+        nfolds = nfolds,
+        nrepeats = nrepeats,
+        nrounds = nrounds,
+        max_depth = max_depth,
+        f_subsample = f_subsample,
+        min_score = min_score,
+        skip_eval = skip_eval,
+        shuffle = shuffle,
+        n_threads = n_threads,
+        xgb_params = xgb_params,
+        cor_data = cor_data,
+        cor_n_features = cor_n_features,
+        use_gpu = use_gpu,
+        gpu_id = gpu_id
       )
 
-      # This added $new_data with preds/errors/shap computed from model$model + model$error_model
-      pred_test_tbl <- tibble::tibble(
-        cell_line = names(fit_test$new_data$predictions),
-        pred = as.numeric(fit_test$new_data$predictions),
-        pred_error = as.numeric(fit_test$new_data$predictions_error)
+      # ---- Write Model Performance ----
+      # metrics.json
+      metrics <- list(
+        jobId = job_id,
+        modelKey = mk,
+        perturbation = perturbation,
+        mean_r = if (!is.null(fit$scores)) mean(fit$scores, na.rm = TRUE) else NA_real_,
+        mean_r2 = if (!is.null(fit$scores)) mean(fit$scores^2, na.rm = TRUE) else NA_real_,
+        mean_rmse = if (!is.null(fit$scores_rmse)) mean(fit$scores_rmse, na.rm = TRUE) else NA_real_,
+        n_scores = if (!is.null(fit$scores)) length(fit$scores) else 0L,
+        skipped = is.null(fit$model) # fit will only return a model if it passes min_score
       )
+      powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
-      readr::write_csv(pred_test_tbl, file.path(model_out_dir, "pred_test.csv"))
+      # ---- Make Predictions ----
+      # pred_test.csv: predictions on held-out test set using the final trained model (if present).
+      # pred_user.csv: predictions on user's samples using the final trained model (if present).
+      # shap_user.csv: SHAP explanation values for user's sample predictions.
+      if (!is.null(fit$model)) {
 
-      # TODO: If we want SHAP for test too, write it out:
-      # shap_test_df <- fit_test$new_data$shap_values %>% tibble::rownames_to_column("cell_line")
-      # readr::write_csv(shap_test_df, file.path(model_out_dir, "shap_test.csv"))
+        # 1) Test predictions
+        fit_test <- make_new_data_predictions(
+          model = fit,
+          name = perturbation,
+          indx = i,
+          total = total,
+          new_data = test_df
+        )
 
-      # 2) User predictions
-      fit_user <- make_new_data_predictions(
-        model = fit,
-        name = perturbation,
-        indx = i,
-        total = total,
-        new_data = user_df
-      )
+        # This added $new_data with preds/errors/shap computed from model$model + model$error_model
+        pred_test_tbl <- tibble::tibble(
+          cell_line = names(fit_test$new_data$predictions),
+          pred = as.numeric(fit_test$new_data$predictions),
+          pred_error = as.numeric(fit_test$new_data$predictions_error)
+        )
 
-      # This added $new_data with preds/errors/shap computed from model$model + model$error_model
-      pred_user_tbl <- tibble::tibble(
-        cell_line = names(fit_user$new_data$predictions),
-        pred = as.numeric(fit_user$new_data$predictions),
-        pred_error = as.numeric(fit_user$new_data$predictions_error)
-      )
+        readr::write_csv(pred_test_tbl, file.path(model_out_dir, "pred_test.csv"))
 
-      readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
+        # TODO: If we want SHAP for test too, write it out:
+        # shap_test_df <- fit_test$new_data$shap_values %>% tibble::rownames_to_column("cell_line")
+        # readr::write_csv(shap_test_df, file.path(model_out_dir, "shap_test.csv"))
 
-      shap_user_df <- fit_user$new_data$shap_values %>%
-        as.data.frame() %>%
-        tibble::rownames_to_column("cell_line")
+        # 2) User predictions
+        fit_user <- make_new_data_predictions(
+          model = fit,
+          name = perturbation,
+          indx = i,
+          total = total,
+          new_data = user_df
+        )
 
-      readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
+        # This added $new_data with preds/errors/shap computed from model$model + model$error_model
+        pred_user_tbl <- tibble::tibble(
+          cell_line = names(fit_user$new_data$predictions),
+          pred = as.numeric(fit_user$new_data$predictions),
+          pred_error = as.numeric(fit_user$new_data$predictions_error)
+        )
 
-      # TODO: If we also want a compact feature importance table:
-      # readr::write_csv(fit_user$new_data$feature_contribution, file.path(model_out_dir, "shap_importance.csv"))
+        readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
 
-      # clean intermediates
-      rm(fit_test, fit_user)
+        shap_user_df <- fit_user$new_data$shap_values %>%
+          as.data.frame() %>%
+          tibble::rownames_to_column("cell_line")
+
+        readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
+
+        # TODO: If we also want a compact feature importance table:
+        # readr::write_csv(fit_user$new_data$feature_contribution, file.path(model_out_dir, "shap_importance.csv"))
+
+        # clean intermediates
+        rm(fit_test, fit_user)
+        gc()
+
+      } else {
+        # Model skipped — we still write empty artifacts
+        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
+        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
+        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
+      }
+
+      message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) OK skipped={is.null(fit$model)}"))
+
+      # Clean memory between models
+      rm(fit)
       gc()
 
-    } else {
-      # Model skipped — we still write empty artifacts
+    }, error = function(e) {
+
+      # Ensure we always emit *some* artifacts for this model.
+      # Keep logs very verbose so we can pinpoint the source.
+      err_txt <- paste0(conditionMessage(e))
+      message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) FAILED: {err_txt}"))
+
+      # Capture a compact traceback as text (best-effort, no extra deps)
+      tb <- tryCatch({
+        paste(utils::capture.output(traceback(2)), collapse = "\n")
+      }, error = function(.e2) {
+        NA_character_
+      })
+
+      # metrics.json with error details
+      metrics <- list(
+        jobId = job_id,
+        modelKey = mk,
+        perturbation = perturbation,
+        mean_r = NA_real_,
+        mean_r2 = NA_real_,
+        mean_rmse = NA_real_,
+        n_scores = 0L,
+        skipped = TRUE,
+        error = list(
+          message = err_txt,
+          class = class(e)[1],
+          traceback = tb
+        )
+      )
+      powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
+
+      # Write empty artifacts matching the normal contract
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
-    }
 
-    # Clean memory between models
-    rm(fit)
-    gc()
+      # Defensive cleanup
+      gc()
+    })
   }
+
+
 
   invisible(TRUE)
 }
