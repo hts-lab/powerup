@@ -30,7 +30,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             nrounds = 100, 
                             max_depth = 3,
                             f_subsample = 1,
-                            min_score = 0.5, 
+                            min_score = 0.05, 
                             skip_eval = FALSE,
                             shuffle = FALSE,
                             n_threads = 4,
@@ -439,7 +439,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
           params = cv_params,
           data = dtrain,
           nrounds = nrounds,
-          watchlist = list(train = dtrain, eval = dval),
+          evals = list(train = dtrain, eval = dval),
           early_stopping_rounds = 10,
           verbose = 0
         )
@@ -494,7 +494,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }        
   
   
-  cat(glue::glue(" R^2 = {round(mean(scores^2),3)} +/- {round(1.96*sd(scores^2),3)} , RMSE = {round(mean(scores_rmse),5)} , (n={length(scores)})"))
+  cat(glue::glue(" r = {round(mean(scores),3)} +/- {round(1.96*sd(scores),3)} | R2 = {round(mean(scores_R2),3)} +/- {round(1.96*sd(scores_R2),3)} | RMSE = {round(mean(scores_rmse),5)} | (n={length(scores)})"))
   flush.console()
   
   
@@ -511,8 +511,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output$scores_d_npv <- scores_d_npv
   output$scores_d_accuracy <- scores_d_accuracy
   
-  # If the score is good enough, we proceed with extra steps                                                                              
-  if (!is.na(mean(scores)) & mean(scores^2) >= min_score){
+  # If the score (R2) is good enough, we proceed with extra steps                                                                              
+  if (!is.na(mean(scores)) & mean(scores_R2) >= min_score){
     
     # Fit one last model using all data    
     last_params <- model_params # Ideally we have found the best params and we set them here
@@ -544,7 +544,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       params = final_params,
       data = last_matrix,
       nrounds = last_nrounds,
-      watchlist = list(train = last_matrix, eval = last_validation),
+      evals = list(train = last_matrix, eval = last_validation),
       early_stopping_rounds = 10,
       verbose = 0
     )
@@ -576,7 +576,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       params = err_params,
       data = error_data,
       nrounds = last_nrounds,
-      watchlist = list(train = error_data),
+      evals = list(train = error_data),
       verbose = 0
     )
         
@@ -646,7 +646,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 fit_depmap_models <- function(depmap_data, models_to_make,
                               response_cutoff = 0.5, decreasing = FALSE,
                               weight_cap = 0,
-                              nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                              nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.05,
                               max_depth = 3,
                               f_subsample = 1,
                               skip_eval = FALSE, shuffle = FALSE,
@@ -703,7 +703,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
 fit_models_and_save <- function(perturbs, chunk_indx, 
                                 model_dataset, response_cutoff = 0.5, decreasing = FALSE,
                                 weight_cap = 0,
-                                nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.05,
                                 max_depth = 3,
                                 f_subsample = 1,
                                 skip_eval = FALSE, shuffle = FALSE,
@@ -788,7 +788,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
 fit_models_in_parallel <- function(perturbs, chunk_size = 20, 
                                    model_dataset, response_cutoff = 0.5, decreasing = FALSE,
                                    weight_cap = 0,
-                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.05,
                                    max_depth = 3,
                                    f_subsample = 1,
                                    skip_eval = FALSE, shuffle = FALSE, 
@@ -853,7 +853,7 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
                        chunk_size = 6, 
                                    response_cutoff = 0.5, decreasing = FALSE,
                                    weight_cap = 0,
-                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.5,
+                                   nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.05,
                                    max_depth = 3,
                                    f_subsample = 1,
                                    skip_eval = FALSE, shuffle = FALSE, 

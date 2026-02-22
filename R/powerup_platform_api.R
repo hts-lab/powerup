@@ -519,7 +519,7 @@ powerup_train_models <- function(
   nrounds = 100,
   max_depth = 3,
   f_subsample = 1,
-  min_score = 0.5,
+  min_score = 0.05,
   skip_eval = FALSE,
   shuffle = FALSE,
   n_threads = 4,
