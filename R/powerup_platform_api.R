@@ -1136,3 +1136,297 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   message(glue("[powerup][jobId={job_id}] FINALIZE done total={total} ok={n_ok} skipped={n_skipped} failed={n_failed} missingMetrics={n_missing}"))
   invisible(TRUE)
 }
+
+
+
+#' Aggregate user predictions across passing models (local runs)
+#'
+#' This is a convenience helper for users running PowerUp locally. It mirrors the
+#' platform FINALIZE aggregation behavior by reading model_status.csv and
+#' combining per-model pred_user.csv into a single long table.
+#'
+#' Passing models are defined as:
+#'   - status == "OK"
+#'   - skipped == FALSE
+#'
+#' The function attempts to resolve pred_user.csv paths robustly:
+#'   1) If predUserPath exists locally as-is, it is used.
+#'   2) If predUserPath looks like a platform path (e.g., jobs/<jobId>/output/models/<modelKey>/pred_user.csv),
+#'      it is mapped to file.path(models_dir, <modelKey>, "pred_user.csv").
+#'   3) Otherwise it falls back to file.path(models_dir, <modelKey>, "pred_user.csv").
+#'
+#' Output:
+#'   - Writes user_predictions_long.csv into out_aggregates_dir (configurable filename)
+#'
+#' Determinism:
+#'   - Models processed in sorted(modelKey) order.
+#'   - Rows sorted by cell_line within each model before writing.
+#'
+#' @param out_aggregates_dir Directory containing model_status.csv and where aggregated output is written.
+#' @param models_dir Directory containing per-model outputs under models_dir/<modelKey>/pred_user.csv.
+#' @param model_status_path Optional explicit path to model_status.csv.
+#'        Defaults to file.path(out_aggregates_dir, "model_status.csv").
+#' @param output_filename Name of the aggregated CSV to write in out_aggregates_dir.
+#' @param verbose If TRUE, prints progress + warnings.
+#'
+#' @return A list with counts and output path. (Invisible)
+#' @export
+powerup_aggregate_user_predictions <- function(
+  out_aggregates_dir,
+  models_dir,
+  model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
+  output_filename = "user_predictions_long.csv",
+  verbose = TRUE
+) {
+  powerup_dir_create(out_aggregates_dir)
+
+  .pu_assert_file_exists(out_aggregates_dir, "out_aggregates_dir")
+  if (!dir.exists(out_aggregates_dir)) stop(glue("out_aggregates_dir is not a directory: {out_aggregates_dir}"))
+
+  .pu_assert_file_exists(models_dir, "models_dir")
+  if (!dir.exists(models_dir)) stop(glue("models_dir is not a directory: {models_dir}"))
+
+  .pu_assert_file_exists(model_status_path, "model_status_path")
+
+  if (!is.character(output_filename) || length(output_filename) != 1 || !nzchar(output_filename)) {
+    stop("output_filename must be a non-empty string")
+  }
+
+  # ---- Read model_status.csv ----
+  ms <- readr::read_csv(model_status_path, show_col_types = FALSE, progress = FALSE)
+
+  required_cols <- c("jobId", "modelKey", "perturbation", "status", "skipped", "predUserPath")
+  missing <- setdiff(required_cols, names(ms))
+  if (length(missing) > 0) {
+    stop(glue(
+      "model_status.csv is missing required columns: {paste(missing, collapse = ', ')}"
+    ))
+  }
+
+  # Normalize types
+  ms <- ms %>%
+    dplyr::mutate(
+      jobId = as.character(.data$jobId),
+      modelKey = as.character(.data$modelKey),
+      perturbation = as.character(.data$perturbation),
+      status = as.character(.data$status),
+      skipped = as.logical(.data$skipped),
+      predUserPath = as.character(.data$predUserPath),
+      mean_r = if ("mean_r" %in% names(ms)) suppressWarnings(as.numeric(.data$mean_r)) else NA_real_,
+      mean_rmse = if ("mean_rmse" %in% names(ms)) suppressWarnings(as.numeric(.data$mean_rmse)) else NA_real_
+    ) %>%
+    dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
+    dplyr::arrange(.data$modelKey)
+
+  passed <- ms %>%
+    dplyr::filter(.data$status == "OK", isFALSE(.data$skipped))
+
+  if (nrow(passed) < 1) {
+    out_path <- file.path(out_aggregates_dir, output_filename)
+    # Write header-only deterministic empty file
+    empty <- tibble::tibble(
+      jobId = character(0),
+      modelKey = character(0),
+      perturbation = character(0),
+      cell_line = character(0),
+      pred = numeric(0),
+      pred_error = numeric(0),
+      metrics_mean_r = numeric(0),
+      metrics_mean_rmse = numeric(0)
+    )
+    readr::write_csv(empty, out_path)
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: no passing models; wrote empty {out_path}"))
+    return(invisible(list(
+      ok = TRUE,
+      output = out_path,
+      counts = list(
+        nModelsTotal = nrow(ms),
+        nModelsPassed = 0L,
+        nModelsWithUserPreds = 0L,
+        nUserSamples = 0L
+      )
+    )))
+  }
+
+  # ---- Path resolver ----
+  # If predUserPath is local and exists -> use.
+  # Else map platform-style paths to local models_dir/<modelKey>/pred_user.csv.
+  resolve_pred_user_path <- function(predUserPath, modelKey) {
+    p <- predUserPath
+    if (!is.na(p) && nzchar(p) && file.exists(p)) return(p)
+
+    # platform-like relative path:
+    # jobs/<jobId>/output/models/<modelKey>/pred_user.csv
+    if (!is.na(p) && nzchar(p) && grepl("^jobs/.+/output/models/.+/pred_user\\.csv$", p)) {
+      local_guess <- file.path(models_dir, modelKey, "pred_user.csv")
+      return(local_guess)
+    }
+
+    # fallback
+    file.path(models_dir, modelKey, "pred_user.csv")
+  }
+
+  out_path <- file.path(out_aggregates_dir, output_filename)
+
+  # Stream-write output for scalability
+  out_con <- file(out_path, open = "wt")
+  on.exit(close(out_con), add = TRUE)
+
+  header <- c(
+    "jobId",
+    "modelKey",
+    "perturbation",
+    "cell_line",
+    "pred",
+    "pred_error",
+    "metrics_mean_r",
+    "metrics_mean_rmse"
+  )
+  writeLines(paste(header, collapse = ","), con = out_con)
+
+  n_models_with_preds <- 0L
+  user_samples_seen <- new.env(parent = emptyenv())  # set-like
+  n_written <- 0L
+
+  # Process in deterministic order
+  passed <- passed %>% dplyr::arrange(.data$modelKey)
+
+  for (i in seq_len(nrow(passed))) {
+    mk <- passed$modelKey[[i]]
+    jobId_i <- passed$jobId[[i]]
+    pert <- passed$perturbation[[i]]
+    mean_r <- passed$mean_r[[i]]
+    mean_rmse <- passed$mean_rmse[[i]]
+    pred_path <- resolve_pred_user_path(passed$predUserPath[[i]], mk)
+
+    if (!file.exists(pred_path)) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: missing pred_user.csv; modelKey={mk} path={pred_path}"))
+      next
+    }
+
+    # Read per-model pred_user.csv.
+    # Keep flexible schema:
+    # - If no 'cell_line' column, treat first column as cell_line
+    # - pred column preference: 'pred' then 'prediction' else first non-id column
+    dt <- tryCatch(
+      data.table::fread(pred_path, data.table = FALSE, showProgress = FALSE),
+      error = function(e) NULL
+    )
+    if (is.null(dt) || nrow(dt) < 1) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: empty/invalid pred_user.csv; modelKey={mk} path={pred_path}"))
+      next
+    }
+
+    # Normalize ID col
+    if (!("cell_line" %in% colnames(dt))) {
+      colnames(dt)[1] <- "cell_line"
+    }
+    dt$cell_line <- as.character(dt$cell_line)
+
+    # Choose prediction column
+    pred_col <- if ("pred" %in% colnames(dt)) {
+      "pred"
+    } else if ("prediction" %in% colnames(dt)) {
+      "prediction"
+    } else {
+      # First non-id column
+      setdiff(colnames(dt), "cell_line")[1]
+    }
+
+    if (is.na(pred_col) || !nzchar(pred_col) || !(pred_col %in% colnames(dt))) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: cannot find pred column; modelKey={mk} path={pred_path}"))
+      next
+    }
+
+    # Optional pred_error column
+    pred_err_col <- if ("pred_error" %in% colnames(dt)) {
+      "pred_error"
+    } else if ("se" %in% colnames(dt)) {
+      "se"
+    } else {
+      NA_character_
+    }
+
+    # Coerce numeric safely
+    suppressWarnings(dt[[pred_col]] <- as.numeric(dt[[pred_col]]))
+    if (!is.na(pred_err_col) && (pred_err_col %in% colnames(dt))) {
+      suppressWarnings(dt[[pred_err_col]] <- as.numeric(dt[[pred_err_col]]))
+    } else {
+      dt$pred_error <- NA_real_
+      pred_err_col <- "pred_error"
+    }
+
+    dt <- dt %>%
+      dplyr::transmute(
+        jobId = jobId_i,
+        modelKey = mk,
+        perturbation = pert,
+        cell_line = .data$cell_line,
+        pred = .data[[pred_col]],
+        pred_error = .data[[pred_err_col]],
+        metrics_mean_r = mean_r,
+        metrics_mean_rmse = mean_rmse
+      ) %>%
+      dplyr::filter(!is.na(.data$cell_line), trimws(.data$cell_line) != "") %>%
+      dplyr::arrange(.data$cell_line)
+
+    if (nrow(dt) < 1) {
+      next
+    }
+
+    # Track unique user samples
+    for (cl in dt$cell_line) user_samples_seen[[cl]] <- TRUE
+
+    # Write rows (CSV escaping via readr's internal is overkill; we ensure safe by quoting cell_line if needed)
+    # We'll minimally quote strings that contain commas/quotes/newlines.
+    csv_escape <- function(x) {
+      if (is.na(x)) return("")
+      s <- as.character(x)
+      if (grepl('[,"\r\n]', s)) {
+        s <- gsub('"', '""', s, fixed = TRUE)
+        return(paste0('"', s, '"'))
+      }
+      s
+    }
+
+    # Build line-by-line for streaming
+    for (r in seq_len(nrow(dt))) {
+      row <- dt[r, ]
+      line <- paste(
+        csv_escape(row$jobId),
+        csv_escape(row$modelKey),
+        csv_escape(row$perturbation),
+        csv_escape(row$cell_line),
+        ifelse(is.na(row$pred), "", format(row$pred, scientific = FALSE)),
+        ifelse(is.na(row$pred_error), "", format(row$pred_error, scientific = FALSE)),
+        ifelse(is.na(row$metrics_mean_r), "", format(row$metrics_mean_r, scientific = FALSE)),
+        ifelse(is.na(row$metrics_mean_rmse), "", format(row$metrics_mean_rmse, scientific = FALSE)),
+        sep = ","
+      )
+      writeLines(line, con = out_con)
+      n_written <- n_written + 1L
+    }
+
+    n_models_with_preds <- n_models_with_preds + 1L
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: aggregated modelKey={mk} rows={nrow(dt)}"))
+  }
+
+  n_user_samples <- length(ls(user_samples_seen, all.names = TRUE))
+
+  if (isTRUE(verbose)) {
+    message(glue(
+      "[powerup] aggregate_user_predictions: wrote {out_path} rows={n_written} models_passed={nrow(passed)} models_with_user_preds={n_models_with_preds} user_samples={n_user_samples}"
+    ))
+  }
+
+  invisible(list(
+    ok = TRUE,
+    output = out_path,
+    counts = list(
+      nModelsTotal = nrow(ms),
+      nModelsPassed = nrow(passed),
+      nModelsWithUserPreds = n_models_with_preds,
+      nUserSamples = n_user_samples
+    )
+  ))
+}

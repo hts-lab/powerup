@@ -17,7 +17,7 @@ add_predictions(models, new_data, models_to_use = NULL)
 This function takes a list of models and makes predictions on new data.
 }
 \examples{
-make_new_data_predictions(my_model,"ko_ctnnb1",1,1,my_new_data)
+add_predictions(models, my_new_data)
 }
 \keyword{model}
 \keyword{predictions}
