@@ -209,6 +209,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
 
 
+
 # This calculates SHAP values
 get_xgb_shap <- function(model, X, sample_names = NULL) {
   cat("[SHAP] ENTER get_xgb_shap\n")
@@ -248,12 +249,32 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
     names(bias) <- sample_names
   }
 
-  # Ensure feature names match X
+  # Ensure feature names match X (for the non-bias part)
   if (!is.null(colnames(X_mat))) {
     colnames(shap) <- colnames(X_mat)
   }
 
-  # importance table
+  # --- store bias INSIDE shap_values as a canonical column "(Intercept)" ---
+  shap_with_bias <- cbind(bias, shap)
+  colnames(shap_with_bias)[1] <- "(Intercept)"
+
+  # Convert to data.frame NOW (match add_predictions.R behavior)
+  # Use data.frame(..., check.names=FALSE) (more reliable than as.data.frame.matrix for name preservation)
+  shap_values_df <- data.frame(shap_with_bias, check.names = FALSE)
+
+  # Preserve/ensure rownames
+  if (is.null(sample_names)) sample_names <- rownames(X)
+  if (!is.null(sample_names) && length(sample_names) == nrow(shap_values_df)) {
+    rownames(shap_values_df) <- sample_names
+  }
+
+  # Deterministic column order: intercept first, then all other features (existing order)
+  cols <- colnames(shap_values_df)
+  cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
+  shap_values_df <- shap_values_df[, cols, drop = FALSE]
+
+
+  # importance table (exclude intercept)
   vals <- apply(shap, 2, function(x) sum(abs(x), na.rm = TRUE))
   contrib <- tibble::tibble(
     term = colnames(shap),
@@ -264,18 +285,19 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
 
   cat(sprintf("[SHAP] predcontrib phis dim: %d x %d\n", nrow(phis), ncol(phis)))
   cat(sprintf("[SHAP] shap dim (no bias): %d x %d\n", nrow(shap), ncol(shap)))
+  cat(sprintf("[SHAP] shap dim (WITH bias): %d x %d\n", nrow(shap_with_bias), ncol(shap_with_bias)))
   cat("[SHAP] EXIT get_xgb_shap OK\n")
   flush.console()
 
   return(list(
-    shap_values = shap,
+    shap_values = shap_values_df,
     bias = bias,
     shap_table = contrib,
     good_terms = pos_terms
   ))
 }
 
-  
+
   
   # If the SD is zero, cor() will throw an error
   get_pseudo_cor <- function(x, y){

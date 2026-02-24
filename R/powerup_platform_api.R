@@ -874,15 +874,40 @@ powerup_train_models <- function(
         readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
 
         rm(fit_test, fit_user)
+        rm(shap_user_df)
+        gc()
+
+
+        # 4) TRAINING SHAP extraction (same contract as SHAP_USER)
+        stage <- "SHAP_TRAIN: extract fit$shap_values"
+        shap_train_df <- tryCatch({
+          fit$shap_values %>%
+            as.data.frame() %>%
+            tibble::rownames_to_column("cell_line")
+        }, error = function(e) {
+          tr <- .pu_capture_traces()
+          msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
+          message(msg)
+          if (nzchar(tr$traceback %||% "")) message(glue("[powerup][jobId={job_id}] {stage} traceback:\n{tr$traceback}"))
+          if (nzchar(tr$calls %||% "")) message(glue("[powerup][jobId={job_id}] {stage} calls:\n{tr$calls}"))
+          if (nzchar(tr$rlang_last_trace %||% "")) message(glue("[powerup][jobId={job_id}] {stage} rlang::last_trace:\n{tr$rlang_last_trace}"))
+          stop(e)
+        })
+
+        readr::write_csv(shap_train_df, file.path(model_out_dir, "shap_train.csv"))
+
+        rm(shap_train_df)
         gc()
 
       } else {
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
+        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_train.csv"))
       }
 
 
+      
 
       message(glue("[powerup][jobId={job_id}] TRAIN modelKey={mk} perturbation={perturbation} ({i} of {total}) OK skipped={is.null(fit$model)}"))
 
@@ -927,6 +952,7 @@ powerup_train_models <- function(
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
+      readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_train.csv"))
 
       # Defensive cleanup
       gc()
@@ -1065,7 +1091,8 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       metricsPath = glue("{model_dir_gcs}/metrics.json"),
       predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
       predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
-      shapUserPath = glue("{model_dir_gcs}/shap_user.csv")
+      shapUserPath = glue("{model_dir_gcs}/shap_user.csv"),
+      shapTrainPath = glue("{model_dir_gcs}/shap_train.csv")
     )
   }
 
@@ -1098,7 +1125,8 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         metricsPath = glue("{model_dir_gcs}/metrics.json"),
         predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
         predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
-        shapUserPath = glue("{model_dir_gcs}/shap_user.csv")
+        shapUserPath = glue("{model_dir_gcs}/shap_user.csv"),
+        shapTrainPath = glue("{model_dir_gcs}/shap_train.csv")
       )
     } else {
       rows[[i]] <- parse_metrics(mf, fallback_model_key = mk, fallback_perturbation = pert)
@@ -1486,6 +1514,273 @@ powerup_aggregate_user_predictions <- function(
       "[powerup] aggregate_user_predictions: wrote {out_csv_path} rows={n_written} models_passed={nrow(passed)} models_with_user_preds={n_models_with_preds} user_samples={n_user_samples}"
     ))
     message(glue("[powerup] aggregate_user_predictions: wrote {out_index_path} models_indexed={length(index_models)}"))
+  }
+
+  invisible(list(
+    ok = TRUE,
+    outputs = list(csv = out_csv_path, index = out_index_path),
+    counts = idx$counts
+  ))
+}
+
+
+#' Aggregate TRAINING SHAP values across passing models (local runs)
+#'
+#' Reads per-model shap_train.csv (WIDE) and writes a single long CSV plus a JSON index.
+#'
+#' Passing models:
+#'   - status == "OK"
+#'   - skipped == FALSE
+#'
+#' Determinism:
+#'   - Models processed in sorted(modelKey) order.
+#'   - cell_line sorted within each model.
+#'   - Features ordered with "(Intercept)" first (if present), then alphabetical.
+#'
+#' Outputs (written to out_aggregates_dir):
+#'   - training_shap_long.csv
+#'   - training_shap_index.json
+#'
+#' @export
+powerup_aggregate_training_shap <- function(
+  out_aggregates_dir,
+  models_dir,
+  model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
+  output_filename = "training_shap_long.csv",
+  index_filename = "training_shap_index.json",
+  verbose = TRUE
+) {
+  powerup_dir_create(out_aggregates_dir)
+
+  .pu_assert_file_exists(out_aggregates_dir, "out_aggregates_dir")
+  if (!dir.exists(out_aggregates_dir)) stop(glue("out_aggregates_dir is not a directory: {out_aggregates_dir}"))
+
+  .pu_assert_file_exists(models_dir, "models_dir")
+  if (!dir.exists(models_dir)) stop(glue("models_dir is not a directory: {models_dir}"))
+
+  .pu_assert_file_exists(model_status_path, "model_status_path")
+
+  if (!is.character(output_filename) || length(output_filename) != 1 || !nzchar(output_filename)) {
+    stop("output_filename must be a non-empty string")
+  }
+  if (!is.character(index_filename) || length(index_filename) != 1 || !nzchar(index_filename)) {
+    stop("index_filename must be a non-empty string")
+  }
+
+  ms <- readr::read_csv(model_status_path, show_col_types = FALSE, progress = FALSE)
+
+  required_cols <- c("jobId", "modelKey", "perturbation", "status", "skipped")
+  missing <- setdiff(required_cols, names(ms))
+  if (length(missing) > 0) {
+    stop(glue("model_status.csv is missing required columns: {paste(missing, collapse = ', ')}"))
+  }
+
+  # Normalize types
+  ms <- ms %>%
+    dplyr::mutate(
+      jobId = as.character(.data$jobId),
+      modelKey = as.character(.data$modelKey),
+      perturbation = as.character(.data$perturbation),
+      status = as.character(.data$status),
+      skipped = as.logical(.data$skipped),
+      shapTrainPath = if ("shapTrainPath" %in% names(ms)) as.character(.data$shapTrainPath) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
+    dplyr::arrange(.data$modelKey)
+
+  passed <- ms %>%
+    dplyr::filter(.data$status == "OK", isFALSE(.data$skipped)) %>%
+    dplyr::arrange(.data$modelKey)
+
+  out_csv_path <- file.path(out_aggregates_dir, output_filename)
+  out_index_path <- file.path(out_aggregates_dir, index_filename)
+
+  # ---- Path resolver ----
+  resolve_shap_train_path <- function(shapTrainPath, modelKey) {
+    p <- shapTrainPath
+    if (!is.na(p) && nzchar(p) && file.exists(p)) return(p)
+
+    # platform-like relative path:
+    # jobs/<jobId>/output/models/<modelKey>/shap_train.csv
+    if (!is.na(p) && nzchar(p) && grepl("^jobs/.+/output/models/.+/shap_train\\.csv$", p)) {
+      return(file.path(models_dir, modelKey, "shap_train.csv"))
+    }
+
+    # fallback
+    file.path(models_dir, modelKey, "shap_train.csv")
+  }
+
+  # ---- Streaming CSV output ----
+  out_con <- file(out_csv_path, open = "wt")
+  on.exit(close(out_con), add = TRUE)
+
+  header <- c("jobId", "modelKey", "perturbation", "cell_line", "feature", "shap_value")
+  writeLines(paste(header, collapse = ","), con = out_con)
+
+  csv_escape <- function(x) {
+    if (is.na(x)) return("")
+    s <- as.character(x)
+    if (grepl('[,"\r\n]', s)) {
+      s <- gsub('"', '""', s, fixed = TRUE)
+      return(paste0('"', s, '"'))
+    }
+    s
+  }
+
+  index_models <- list()
+  n_models_with_train_shap <- 0L
+  n_written <- 0L
+
+  train_samples_seen <- new.env(parent = emptyenv())
+
+  if (nrow(passed) < 1) {
+    idx <- list(
+      schemaVersion = 1,
+      generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
+      counts = list(
+        nModelsTotal = nrow(ms),
+        nModelsPassed = 0L,
+        nModelsWithTrainingShap = 0L,
+        nTrainingSamples = 0L,
+        nRows = 0L
+      ),
+      artifacts = list(
+        training_shap_long = basename(out_csv_path),
+        training_shap_index = basename(out_index_path)
+      ),
+      models = list()
+    )
+    jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
+    if (isTRUE(verbose)) {
+      message(glue("[powerup] aggregate_training_shap: no passing models; wrote empty {out_csv_path} and {out_index_path}"))
+    }
+    return(invisible(list(ok = TRUE, outputs = list(csv = out_csv_path, index = out_index_path), counts = idx$counts)))
+  }
+
+  for (i in seq_len(nrow(passed))) {
+    mk <- passed$modelKey[[i]]
+    jobId_i <- passed$jobId[[i]]
+    pert <- passed$perturbation[[i]]
+
+    shap_path <- resolve_shap_train_path(passed$shapTrainPath[[i]], mk)
+
+    idx_rec <- list(
+      modelKey = mk,
+      perturbation = pert,
+      passed = TRUE,
+      hasTrainingShap = FALSE,
+      shapTrainPath = shap_path
+    )
+
+    if (!file.exists(shap_path)) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: missing shap_train.csv; modelKey={mk} path={shap_path}"))
+      index_models[[length(index_models) + 1L]] <- idx_rec
+      next
+    }
+
+    dt <- tryCatch(
+      data.table::fread(shap_path, data.table = FALSE, showProgress = FALSE),
+      error = function(e) e
+    )
+
+    if (inherits(dt, "error") || is.null(dt) || nrow(dt) < 1) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: empty/invalid shap_train.csv; modelKey={mk} path={shap_path}"))
+      if (inherits(dt, "error")) {
+        idx_rec$error <- list(type = class(dt)[1], message = conditionMessage(dt))
+      }
+      index_models[[length(index_models) + 1L]] <- idx_rec
+      next
+    }
+
+    # Normalize ID col
+    if (!("cell_line" %in% colnames(dt))) {
+      colnames(dt)[1] <- "cell_line"
+    }
+    dt$cell_line <- as.character(dt$cell_line)
+
+    # Deterministic row order
+    dt <- dt %>% dplyr::filter(!is.na(.data$cell_line), trimws(.data$cell_line) != "") %>% dplyr::arrange(.data$cell_line)
+
+    fields <- colnames(dt)
+    feature_cols <- setdiff(fields, "cell_line")
+
+    # Deterministic feature order: (Intercept) first then alphabetical
+    feats <- sort(feature_cols)
+    if ("(Intercept)" %in% feats) {
+      feats <- c("(Intercept)", setdiff(feats, "(Intercept)"))
+    }
+
+    idx_rec$trainingShapSchema <- list(
+      format = "wide",
+      cell_col = "cell_line",
+      n_features = length(feats),
+      feature_preview = head(feats, 25),
+      columns = fields
+    )
+
+    any_rows <- FALSE
+
+    # Stream melt
+    for (r in seq_len(nrow(dt))) {
+      cl <- dt$cell_line[[r]]
+      train_samples_seen[[cl]] <- TRUE
+
+      for (feat in feats) {
+        val <- dt[[feat]][[r]]
+        if (is.null(val) || is.na(val)) next
+
+        sval <- as.character(val)
+        if (!nzchar(trimws(sval))) next
+
+        line <- paste(
+          csv_escape(jobId_i),
+          csv_escape(mk),
+          csv_escape(pert),
+          csv_escape(cl),
+          csv_escape(feat),
+          csv_escape(sval),
+          sep = ","
+        )
+        writeLines(line, con = out_con)
+        n_written <- n_written + 1L
+        any_rows <- TRUE
+      }
+    }
+
+    if (any_rows) {
+      idx_rec$hasTrainingShap <- TRUE
+      n_models_with_train_shap <- n_models_with_train_shap + 1L
+    }
+
+    index_models[[length(index_models) + 1L]] <- idx_rec
+
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: aggregated modelKey={mk} rows_written_so_far={n_written}"))
+  }
+
+  n_train_samples <- length(ls(train_samples_seen, all.names = TRUE))
+
+  idx <- list(
+    schemaVersion = 1,
+    generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    counts = list(
+      nModelsTotal = nrow(ms),
+      nModelsPassed = nrow(passed),
+      nModelsWithTrainingShap = n_models_with_train_shap,
+      nTrainingSamples = n_train_samples,
+      nRows = n_written
+    ),
+    artifacts = list(
+      training_shap_long = basename(out_csv_path),
+      training_shap_index = basename(out_index_path)
+    ),
+    models = index_models
+  )
+
+  jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
+
+  if (isTRUE(verbose)) {
+    message(glue("[powerup] aggregate_training_shap: wrote {out_csv_path} rows={n_written} models_passed={nrow(passed)} models_with_training_shap={n_models_with_train_shap} training_samples={n_train_samples}"))
+    message(glue("[powerup] aggregate_training_shap: wrote {out_index_path} models_indexed={length(index_models)}"))
   }
 
   invisible(list(
