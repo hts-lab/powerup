@@ -166,6 +166,37 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   # Explain predictions (BYPASS fastshap completely)
   shap <- get_xgb_shap_predcontrib(model$model, X_mat, sample_names)
 
+  # ------------------------------------------------------------
+  # Include SHAP bias as a special "feature" column in shap_values
+  # so downstream plotting can reconstruct:
+  #   pred ≈ (Intercept) + sum(feature SHAP)
+  #
+  # We name it exactly "(Intercept)" for consistency with common
+  # SHAP conventions. Keep check.names=FALSE so parentheses remain.
+  # ------------------------------------------------------------
+  shap_values_df <- shap$shap_values
+  if (!is.data.frame(shap_values_df)) {
+    shap_values_df <- as.data.frame(shap_values_df, check.names = FALSE)
+  }
+
+  # Ensure rownames match sample_names (defensive)
+  if (is.null(rownames(shap_values_df)) || length(rownames(shap_values_df)) != length(sample_names)) {
+    rownames(shap_values_df) <- sample_names
+  }
+
+  # Add bias column as "(Intercept)"
+  shap_values_df[["(Intercept)"]] <- as.numeric(shap$shap_bias)
+
+  # Deterministic column order: put intercept first, then features in their existing order
+  cols <- colnames(shap_values_df)
+  cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
+  shap_values_df <- shap_values_df[, cols, drop = FALSE]
+
+  # Replace shap_values stored on model with the augmented version
+  model$new_data$shap_values <- shap_values_df
+
+
+
   # Attach new data outputs to the original model
   model$new_data$data <- new_data
   model$new_data$predictions <- predictions
@@ -173,7 +204,7 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
 
   model$new_data$feature_contribution <- shap$shap_table
   model$new_data$important_features <- shap$good_terms
-  model$new_data$shap_values <- shap$shap_values
+  #model$new_data$shap_values <- shap$shap_values (see above)
   model$new_data$shap_bias <- shap$shap_bias
 
   return(model)
