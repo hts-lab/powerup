@@ -9,6 +9,7 @@ powerup_aggregate_user_predictions(
   models_dir,
   model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
   output_filename = "user_predictions_long.csv",
+  index_filename = "user_predictions_index.json",
   verbose = TRUE
 )
 }
@@ -22,15 +23,17 @@ Defaults to file.path(out_aggregates_dir, "model_status.csv").}
 
 \item{output_filename}{Name of the aggregated CSV to write in out_aggregates_dir.}
 
+\item{index_filename}{Name of the index JSON to write in out_aggregates_dir.}
+
 \item{verbose}{If TRUE, prints progress + warnings.}
 }
 \value{
-A list with counts and output path. (Invisible)
+A list with counts and output paths. (Invisible)
 }
 \description{
 This is a convenience helper for users running PowerUp locally. It mirrors the
 platform FINALIZE aggregation behavior by reading model_status.csv and
-combining per-model pred_user.csv into a single long table.
+combining per-model pred_user.csv into a single long table, plus a small JSON index.
 }
 \details{
 Passing models are defined as:
@@ -47,9 +50,10 @@ it is mapped to file.path(models_dir, \if{html}{\out{<modelKey>}}, "pred_user.cs
 \item Otherwise it falls back to file.path(models_dir, \if{html}{\out{<modelKey>}}, "pred_user.csv").
 }
 
-Output:
+Outputs (written to out_aggregates_dir):
 \itemize{
-\item Writes user_predictions_long.csv into out_aggregates_dir (configurable filename)
+\item user_predictions_long.csv
+\item user_predictions_index.json
 }
 
 Determinism:

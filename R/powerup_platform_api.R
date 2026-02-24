@@ -1139,11 +1139,12 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
 
 
 
+
 #' Aggregate user predictions across passing models (local runs)
 #'
 #' This is a convenience helper for users running PowerUp locally. It mirrors the
 #' platform FINALIZE aggregation behavior by reading model_status.csv and
-#' combining per-model pred_user.csv into a single long table.
+#' combining per-model pred_user.csv into a single long table, plus a small JSON index.
 #'
 #' Passing models are defined as:
 #'   - status == "OK"
@@ -1155,8 +1156,9 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
 #'      it is mapped to file.path(models_dir, <modelKey>, "pred_user.csv").
 #'   3) Otherwise it falls back to file.path(models_dir, <modelKey>, "pred_user.csv").
 #'
-#' Output:
-#'   - Writes user_predictions_long.csv into out_aggregates_dir (configurable filename)
+#' Outputs (written to out_aggregates_dir):
+#'   - user_predictions_long.csv
+#'   - user_predictions_index.json
 #'
 #' Determinism:
 #'   - Models processed in sorted(modelKey) order.
@@ -1167,15 +1169,17 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
 #' @param model_status_path Optional explicit path to model_status.csv.
 #'        Defaults to file.path(out_aggregates_dir, "model_status.csv").
 #' @param output_filename Name of the aggregated CSV to write in out_aggregates_dir.
+#' @param index_filename Name of the index JSON to write in out_aggregates_dir.
 #' @param verbose If TRUE, prints progress + warnings.
 #'
-#' @return A list with counts and output path. (Invisible)
+#' @return A list with counts and output paths. (Invisible)
 #' @export
 powerup_aggregate_user_predictions <- function(
   out_aggregates_dir,
   models_dir,
   model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
   output_filename = "user_predictions_long.csv",
+  index_filename = "user_predictions_index.json",
   verbose = TRUE
 ) {
   powerup_dir_create(out_aggregates_dir)
@@ -1190,6 +1194,9 @@ powerup_aggregate_user_predictions <- function(
 
   if (!is.character(output_filename) || length(output_filename) != 1 || !nzchar(output_filename)) {
     stop("output_filename must be a non-empty string")
+  }
+  if (!is.character(index_filename) || length(index_filename) != 1 || !nzchar(index_filename)) {
+    stop("index_filename must be a non-empty string")
   }
 
   # ---- Read model_status.csv ----
@@ -1219,38 +1226,13 @@ powerup_aggregate_user_predictions <- function(
     dplyr::arrange(.data$modelKey)
 
   passed <- ms %>%
-    dplyr::filter(.data$status == "OK", isFALSE(.data$skipped))
+    dplyr::filter(.data$status == "OK", isFALSE(.data$skipped)) %>%
+    dplyr::arrange(.data$modelKey)
 
-  if (nrow(passed) < 1) {
-    out_path <- file.path(out_aggregates_dir, output_filename)
-    # Write header-only deterministic empty file
-    empty <- tibble::tibble(
-      jobId = character(0),
-      modelKey = character(0),
-      perturbation = character(0),
-      cell_line = character(0),
-      pred = numeric(0),
-      pred_error = numeric(0),
-      metrics_mean_r = numeric(0),
-      metrics_mean_rmse = numeric(0)
-    )
-    readr::write_csv(empty, out_path)
-    if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: no passing models; wrote empty {out_path}"))
-    return(invisible(list(
-      ok = TRUE,
-      output = out_path,
-      counts = list(
-        nModelsTotal = nrow(ms),
-        nModelsPassed = 0L,
-        nModelsWithUserPreds = 0L,
-        nUserSamples = 0L
-      )
-    )))
-  }
+  out_csv_path <- file.path(out_aggregates_dir, output_filename)
+  out_index_path <- file.path(out_aggregates_dir, index_filename)
 
   # ---- Path resolver ----
-  # If predUserPath is local and exists -> use.
-  # Else map platform-style paths to local models_dir/<modelKey>/pred_user.csv.
   resolve_pred_user_path <- function(predUserPath, modelKey) {
     p <- predUserPath
     if (!is.na(p) && nzchar(p) && file.exists(p)) return(p)
@@ -1258,18 +1240,15 @@ powerup_aggregate_user_predictions <- function(
     # platform-like relative path:
     # jobs/<jobId>/output/models/<modelKey>/pred_user.csv
     if (!is.na(p) && nzchar(p) && grepl("^jobs/.+/output/models/.+/pred_user\\.csv$", p)) {
-      local_guess <- file.path(models_dir, modelKey, "pred_user.csv")
-      return(local_guess)
+      return(file.path(models_dir, modelKey, "pred_user.csv"))
     }
 
     # fallback
     file.path(models_dir, modelKey, "pred_user.csv")
   }
 
-  out_path <- file.path(out_aggregates_dir, output_filename)
-
-  # Stream-write output for scalability
-  out_con <- file(out_path, open = "wt")
+  # ---- Prepare streaming CSV output ----
+  out_con <- file(out_csv_path, open = "wt")
   on.exit(close(out_con), add = TRUE)
 
   header <- c(
@@ -1284,13 +1263,54 @@ powerup_aggregate_user_predictions <- function(
   )
   writeLines(paste(header, collapse = ","), con = out_con)
 
+  # For index.json
+  index_models <- list()
+
   n_models_with_preds <- 0L
   user_samples_seen <- new.env(parent = emptyenv())  # set-like
   n_written <- 0L
 
-  # Process in deterministic order
-  passed <- passed %>% dplyr::arrange(.data$modelKey)
+  # Minimal CSV escaping for strings
+  csv_escape <- function(x) {
+    if (is.na(x)) return("")
+    s <- as.character(x)
+    if (grepl('[,"\r\n]', s)) {
+      s <- gsub('"', '""', s, fixed = TRUE)
+      return(paste0('"', s, '"'))
+    }
+    s
+  }
 
+  # If no passing models, write empty outputs deterministically
+  if (nrow(passed) < 1) {
+    # CSV already has header; nothing else to write
+    idx <- list(
+      schemaVersion = 1,
+      generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
+      counts = list(
+        nModelsTotal = nrow(ms),
+        nModelsPassed = 0L,
+        nModelsWithUserPreds = 0L,
+        nUserSamples = 0L
+      ),
+      artifacts = list(
+        user_predictions_long = basename(out_csv_path),
+        user_predictions_index = basename(out_index_path)
+      ),
+      models = list()
+    )
+    jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
+    if (isTRUE(verbose)) {
+      message(glue("[powerup] aggregate_user_predictions: no passing models; wrote empty {out_csv_path} and {out_index_path}"))
+    }
+    return(invisible(list(
+      ok = TRUE,
+      outputs = list(csv = out_csv_path, index = out_index_path),
+      counts = idx$counts
+    )))
+  }
+
+  # ---- Process each passing model deterministically ----
   for (i in seq_len(nrow(passed))) {
     mk <- passed$modelKey[[i]]
     jobId_i <- passed$jobId[[i]]
@@ -1299,21 +1319,32 @@ powerup_aggregate_user_predictions <- function(
     mean_rmse <- passed$mean_rmse[[i]]
     pred_path <- resolve_pred_user_path(passed$predUserPath[[i]], mk)
 
+    # Default index record (updated below)
+    idx_rec <- list(
+      modelKey = mk,
+      perturbation = pert,
+      passed = TRUE,
+      hasUserPreds = FALSE,
+      predUserPath = pred_path
+    )
+
     if (!file.exists(pred_path)) {
       if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: missing pred_user.csv; modelKey={mk} path={pred_path}"))
+      index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
-    # Read per-model pred_user.csv.
-    # Keep flexible schema:
-    # - If no 'cell_line' column, treat first column as cell_line
-    # - pred column preference: 'pred' then 'prediction' else first non-id column
     dt <- tryCatch(
       data.table::fread(pred_path, data.table = FALSE, showProgress = FALSE),
-      error = function(e) NULL
+      error = function(e) e
     )
-    if (is.null(dt) || nrow(dt) < 1) {
+
+    if (inherits(dt, "error") || is.null(dt) || nrow(dt) < 1) {
       if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: empty/invalid pred_user.csv; modelKey={mk} path={pred_path}"))
+      if (inherits(dt, "error")) {
+        idx_rec$error <- list(type = class(dt)[1], message = conditionMessage(dt))
+      }
+      index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
@@ -1323,25 +1354,34 @@ powerup_aggregate_user_predictions <- function(
     }
     dt$cell_line <- as.character(dt$cell_line)
 
+    fields <- colnames(dt)
+
     # Choose prediction column
-    pred_col <- if ("pred" %in% colnames(dt)) {
+    pred_col <- if ("pred" %in% fields) {
       "pred"
-    } else if ("prediction" %in% colnames(dt)) {
+    } else if ("prediction" %in% fields) {
       "prediction"
     } else {
-      # First non-id column
-      setdiff(colnames(dt), "cell_line")[1]
+      setdiff(fields, "cell_line")[1]
     }
 
-    if (is.na(pred_col) || !nzchar(pred_col) || !(pred_col %in% colnames(dt))) {
+    if (is.na(pred_col) || !nzchar(pred_col) || !(pred_col %in% fields)) {
       if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: cannot find pred column; modelKey={mk} path={pred_path}"))
+      idx_rec$error <- list(type = "SchemaError", message = "Could not determine prediction column")
+      idx_rec$predUserSchema <- list(
+        cell_col = "cell_line",
+        pred_col = NA,
+        pred_error_col = NA,
+        columns = fields
+      )
+      index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
     # Optional pred_error column
-    pred_err_col <- if ("pred_error" %in% colnames(dt)) {
+    pred_err_col <- if ("pred_error" %in% fields) {
       "pred_error"
-    } else if ("se" %in% colnames(dt)) {
+    } else if ("se" %in% fields) {
       "se"
     } else {
       NA_character_
@@ -1349,14 +1389,15 @@ powerup_aggregate_user_predictions <- function(
 
     # Coerce numeric safely
     suppressWarnings(dt[[pred_col]] <- as.numeric(dt[[pred_col]]))
-    if (!is.na(pred_err_col) && (pred_err_col %in% colnames(dt))) {
+    if (!is.na(pred_err_col) && (pred_err_col %in% fields)) {
       suppressWarnings(dt[[pred_err_col]] <- as.numeric(dt[[pred_err_col]]))
     } else {
       dt$pred_error <- NA_real_
       pred_err_col <- "pred_error"
     }
 
-    dt <- dt %>%
+    # Build standardized output + deterministic ordering
+    out_tbl <- dt %>%
       dplyr::transmute(
         jobId = jobId_i,
         modelKey = mk,
@@ -1370,28 +1411,23 @@ powerup_aggregate_user_predictions <- function(
       dplyr::filter(!is.na(.data$cell_line), trimws(.data$cell_line) != "") %>%
       dplyr::arrange(.data$cell_line)
 
-    if (nrow(dt) < 1) {
+    if (nrow(out_tbl) < 1) {
+      idx_rec$predUserSchema <- list(
+        cell_col = "cell_line",
+        pred_col = pred_col,
+        pred_error_col = ifelse(is.na(pred_err_col), NA, pred_err_col),
+        columns = fields
+      )
+      index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
     # Track unique user samples
-    for (cl in dt$cell_line) user_samples_seen[[cl]] <- TRUE
+    for (cl in out_tbl$cell_line) user_samples_seen[[cl]] <- TRUE
 
-    # Write rows (CSV escaping via readr's internal is overkill; we ensure safe by quoting cell_line if needed)
-    # We'll minimally quote strings that contain commas/quotes/newlines.
-    csv_escape <- function(x) {
-      if (is.na(x)) return("")
-      s <- as.character(x)
-      if (grepl('[,"\r\n]', s)) {
-        s <- gsub('"', '""', s, fixed = TRUE)
-        return(paste0('"', s, '"'))
-      }
-      s
-    }
-
-    # Build line-by-line for streaming
-    for (r in seq_len(nrow(dt))) {
-      row <- dt[r, ]
+    # Stream write rows
+    for (r in seq_len(nrow(out_tbl))) {
+      row <- out_tbl[r, ]
       line <- paste(
         csv_escape(row$jobId),
         csv_escape(row$modelKey),
@@ -1408,25 +1444,53 @@ powerup_aggregate_user_predictions <- function(
     }
 
     n_models_with_preds <- n_models_with_preds + 1L
-    if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: aggregated modelKey={mk} rows={nrow(dt)}"))
+
+    idx_rec$hasUserPreds <- TRUE
+    idx_rec$mean_r <- mean_r
+    idx_rec$mean_rmse <- mean_rmse
+    idx_rec$predUserSchema <- list(
+      cell_col = "cell_line",
+      pred_col = pred_col,
+      pred_error_col = pred_err_col,
+      columns = fields
+    )
+
+    index_models[[length(index_models) + 1L]] <- idx_rec
+
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_user_predictions: aggregated modelKey={mk} rows={nrow(out_tbl)}"))
   }
 
   n_user_samples <- length(ls(user_samples_seen, all.names = TRUE))
 
-  if (isTRUE(verbose)) {
-    message(glue(
-      "[powerup] aggregate_user_predictions: wrote {out_path} rows={n_written} models_passed={nrow(passed)} models_with_user_preds={n_models_with_preds} user_samples={n_user_samples}"
-    ))
-  }
-
-  invisible(list(
-    ok = TRUE,
-    output = out_path,
+  # ---- Write index JSON ----
+  idx <- list(
+    schemaVersion = 1,
+    generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
     counts = list(
       nModelsTotal = nrow(ms),
       nModelsPassed = nrow(passed),
       nModelsWithUserPreds = n_models_with_preds,
       nUserSamples = n_user_samples
-    )
+    ),
+    artifacts = list(
+      user_predictions_long = basename(out_csv_path),
+      user_predictions_index = basename(out_index_path)
+    ),
+    # Deterministic ordering already enforced by passed %>% arrange(modelKey)
+    models = index_models
+  )
+  jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
+
+  if (isTRUE(verbose)) {
+    message(glue(
+      "[powerup] aggregate_user_predictions: wrote {out_csv_path} rows={n_written} models_passed={nrow(passed)} models_with_user_preds={n_models_with_preds} user_samples={n_user_samples}"
+    ))
+    message(glue("[powerup] aggregate_user_predictions: wrote {out_index_path} models_indexed={length(index_models)}"))
+  }
+
+  invisible(list(
+    ok = TRUE,
+    outputs = list(csv = out_csv_path, index = out_index_path),
+    counts = idx$counts
   ))
 }
