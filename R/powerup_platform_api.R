@@ -38,7 +38,7 @@ powerup_write_json <- function(path, obj) {
   }
   arrow::write_parquet(df, path, compression = "zstd", use_dictionary = TRUE)
   TRUE
-  }
+}
 
 
 .pu_assert_file_exists <- function(path, label) {
