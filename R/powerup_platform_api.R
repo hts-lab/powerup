@@ -856,6 +856,15 @@ powerup_train_models <- function(
         readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
 
         # 3) SHAP extraction
+        .pu_write_parquet_required <- function(df, path) {
+          if (!requireNamespace("arrow", quietly = TRUE)) {
+            stop(glue::glue("[powerup] arrow R package is required to write parquet: {path}"))
+          }
+          arrow::write_parquet(df, path)
+          TRUE
+        }
+
+
         stage <- "SHAP_USER: extract fit_user$new_data$shap_values"
         shap_user_df <- tryCatch({
           fit_user$new_data$shap_values %>%
@@ -871,7 +880,8 @@ powerup_train_models <- function(
           stop(e)
         })
 
-        readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
+        #readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
+        .pu_write_parquet_required(shap_user_df, file.path(model_out_dir, "shap_user.parquet"))
 
         rm(fit_test, fit_user)
         rm(shap_user_df)
@@ -894,7 +904,8 @@ powerup_train_models <- function(
           stop(e)
         })
 
-        readr::write_csv(shap_train_df, file.path(model_out_dir, "shap_train.csv"))
+        # readr::write_csv(shap_train_df, file.path(model_out_dir, "shap_train.csv"))
+        .pu_write_parquet_required(shap_train_df, file.path(model_out_dir, "shap_train.parquet"))
 
         rm(shap_train_df)
         gc()
@@ -902,8 +913,8 @@ powerup_train_models <- function(
       } else {
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
         readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
-        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
-        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_train.csv"))
+        .pu_write_parquet_required(tibble::tibble(), file.path(model_out_dir, "shap_user.parquet"))
+        .pu_write_parquet_required(tibble::tibble(), file.path(model_out_dir, "shap_train.parquet"))
       }
 
 
@@ -951,8 +962,8 @@ powerup_train_models <- function(
       # Write empty artifacts matching the normal contract
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
       readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_user.csv"))
-      readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_user.csv"))
-      readr::write_csv(tibble::tibble(), file.path(model_out_dir, "shap_train.csv"))
+      .pu_write_parquet_required(tibble::tibble(), file.path(model_out_dir, "shap_user.parquet"))
+      .pu_write_parquet_required(tibble::tibble(), file.path(model_out_dir, "shap_train.parquet"))
 
       # Defensive cleanup
       gc()
@@ -1091,8 +1102,8 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       metricsPath = glue("{model_dir_gcs}/metrics.json"),
       predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
       predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
-      shapUserPath = glue("{model_dir_gcs}/shap_user.csv"),
-      shapTrainPath = glue("{model_dir_gcs}/shap_train.csv")
+      shapUserPath = glue("{model_dir_gcs}/shap_user.parquet"),
+      shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
     )
   }
 
@@ -1125,8 +1136,8 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         metricsPath = glue("{model_dir_gcs}/metrics.json"),
         predTestPath = glue("{model_dir_gcs}/pred_test.csv"),
         predUserPath = glue("{model_dir_gcs}/pred_user.csv"),
-        shapUserPath = glue("{model_dir_gcs}/shap_user.csv"),
-        shapTrainPath = glue("{model_dir_gcs}/shap_train.csv")
+        shapUserPath = glue("{model_dir_gcs}/shap_user.parquet"),
+        shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
       )
     } else {
       rows[[i]] <- parse_metrics(mf, fallback_model_key = mk, fallback_perturbation = pert)
@@ -1524,9 +1535,12 @@ powerup_aggregate_user_predictions <- function(
 }
 
 
+
+
 #' Aggregate TRAINING SHAP values across passing models (local runs)
 #'
-#' Reads per-model shap_train.csv (WIDE) and writes a single long CSV plus a JSON index.
+#' Reads per-model shap_train.parquet (WIDE) and writes a LONG parquet "dataset"
+#' as multiple part files + a JSON index.
 #'
 #' Passing models:
 #'   - status == "OK"
@@ -1534,11 +1548,16 @@ powerup_aggregate_user_predictions <- function(
 #'
 #' Determinism:
 #'   - Models processed in sorted(modelKey) order.
-#'   - cell_line sorted within each model.
+#'   - cell_line order preserved within each parquet batch (arrow batch order).
 #'   - Features ordered with "(Intercept)" first (if present), then alphabetical.
 #'
-#' Outputs (written to out_aggregates_dir):
-#'   - training_shap_long.csv
+#' Filtering:
+#'   - Keeps ONLY abs(shap_value) > 0 (non-zero)
+#'   - Excludes "(Intercept)" from output rows (consistent with worker finalize melt)
+#'
+#' Outputs:
+#'   - A directory under out_aggregates_dir: <output_basename>/
+#'       - part-00001.parquet, part-00002.parquet, ...
 #'   - training_shap_index.json
 #'
 #' @export
@@ -1546,9 +1565,10 @@ powerup_aggregate_training_shap <- function(
   out_aggregates_dir,
   models_dir,
   model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
-  output_filename = "training_shap_long.csv",
+  output_filename = "training_shap_long",   # will be a DIRECTORY, not a single file
   index_filename = "training_shap_index.json",
-  verbose = TRUE
+  verbose = TRUE,
+  part_rows = 500000L  # rows per parquet part (tune as needed)
 ) {
   powerup_dir_create(out_aggregates_dir)
 
@@ -1561,12 +1581,17 @@ powerup_aggregate_training_shap <- function(
   .pu_assert_file_exists(model_status_path, "model_status_path")
 
   if (!is.character(output_filename) || length(output_filename) != 1 || !nzchar(output_filename)) {
-    stop("output_filename must be a non-empty string")
+    stop("output_filename must be a non-empty string (directory basename)")
   }
   if (!is.character(index_filename) || length(index_filename) != 1 || !nzchar(index_filename)) {
     stop("index_filename must be a non-empty string")
   }
 
+  if (!requireNamespace("arrow", quietly = TRUE)) {
+    stop(glue("[powerup] arrow R package is required to read parquet shap_train.parquet"))
+  }
+
+  # ---- Read model_status.csv ----
   ms <- readr::read_csv(model_status_path, show_col_types = FALSE, progress = FALSE)
 
   required_cols <- c("jobId", "modelKey", "perturbation", "status", "skipped")
@@ -1575,7 +1600,6 @@ powerup_aggregate_training_shap <- function(
     stop(glue("model_status.csv is missing required columns: {paste(missing, collapse = ', ')}"))
   }
 
-  # Normalize types
   ms <- ms %>%
     dplyr::mutate(
       jobId = as.character(.data$jobId),
@@ -1592,76 +1616,116 @@ powerup_aggregate_training_shap <- function(
     dplyr::filter(.data$status == "OK", isFALSE(.data$skipped)) %>%
     dplyr::arrange(.data$modelKey)
 
-  out_csv_path <- file.path(out_aggregates_dir, output_filename)
+  # ---- Output locations ----
+  out_dir <- file.path(out_aggregates_dir, output_filename)
+  powerup_dir_create(out_dir)
   out_index_path <- file.path(out_aggregates_dir, index_filename)
 
-  # ---- Path resolver ----
+  # Clean existing part files deterministically (local helper; safe)
+  old_parts <- list.files(out_dir, pattern = "^part-[0-9]+\\.parquet$", full.names = TRUE)
+  if (length(old_parts) > 0) file.remove(old_parts)
+
+  # ---- Path resolver: expects shap_train.parquet now ----
   resolve_shap_train_path <- function(shapTrainPath, modelKey) {
     p <- shapTrainPath
     if (!is.na(p) && nzchar(p) && file.exists(p)) return(p)
 
     # platform-like relative path:
-    # jobs/<jobId>/output/models/<modelKey>/shap_train.csv
-    if (!is.na(p) && nzchar(p) && grepl("^jobs/.+/output/models/.+/shap_train\\.csv$", p)) {
-      return(file.path(models_dir, modelKey, "shap_train.csv"))
+    # jobs/<jobId>/output/models/<modelKey>/shap_train.parquet
+    if (!is.na(p) && nzchar(p) && grepl("^jobs/.+/output/models/.+/shap_train\\.parquet$", p)) {
+      return(file.path(models_dir, modelKey, "shap_train.parquet"))
     }
 
     # fallback
-    file.path(models_dir, modelKey, "shap_train.csv")
+    file.path(models_dir, modelKey, "shap_train.parquet")
   }
 
-  # ---- Streaming CSV output ----
-  out_con <- file(out_csv_path, open = "wt")
-  on.exit(close(out_con), add = TRUE)
-
-  header <- c("jobId", "modelKey", "perturbation", "cell_line", "feature", "shap_value")
-  writeLines(paste(header, collapse = ","), con = out_con)
-
-  csv_escape <- function(x) {
-    if (is.na(x)) return("")
-    s <- as.character(x)
-    if (grepl('[,"\r\n]', s)) {
-      s <- gsub('"', '""', s, fixed = TRUE)
-      return(paste0('"', s, '"'))
-    }
-    s
-  }
-
+  # ---- Index accumulators ----
   index_models <- list()
-  n_models_with_train_shap <- 0L
-  n_written <- 0L
-
+  n_models_with_training_shap <- 0L
+  n_rows_total <- 0L
   train_samples_seen <- new.env(parent = emptyenv())
 
+  # Buffer for writing part files
+  buf <- NULL
+  buf_n <- 0L
+  part_i <- 0L
+
+  # Schema for long output
+  long_schema <- arrow::schema(
+    jobId = arrow::utf8(),
+    modelKey = arrow::utf8(),
+    perturbation = arrow::utf8(),
+    cell_line = arrow::utf8(),
+    feature = arrow::utf8(),
+    shap_value = arrow::float64()
+  )
+
+  flush_part <- function() {
+    if (is.null(buf) || buf_n < 1L) return(invisible(FALSE))
+    part_i <<- part_i + 1L
+    part_path <- file.path(out_dir, sprintf("part-%05d.parquet", part_i))
+
+    # write_parquet expects an Arrow Table or data.frame; we use Arrow Table
+    arrow::write_parquet(buf, part_path, compression = "zstd", use_dictionary = TRUE)
+
+    if (isTRUE(verbose)) {
+      message(glue("[powerup] aggregate_training_shap: wrote {basename(part_path)} rows={buf_n}"))
+    }
+
+    n_rows_total <<- n_rows_total + buf_n
+    buf <<- NULL
+    buf_n <<- 0L
+    invisible(TRUE)
+  }
+
+  append_rows <- function(df) {
+    # df must have the long columns; convert to Arrow Table with stable schema
+    if (is.null(df) || nrow(df) < 1) return(invisible(FALSE))
+    tbl <- arrow::Table$create(df, schema = long_schema)
+
+    if (is.null(buf)) {
+      buf <<- tbl
+      buf_n <<- tbl$num_rows
+    } else {
+      # concat tables
+      buf <<- arrow::Table$ConcatTables(list(buf, tbl))
+      buf_n <<- buf$num_rows
+    }
+
+    if (buf_n >= as.integer(part_rows)) flush_part()
+    invisible(TRUE)
+  }
+
+  # If no passing models
   if (nrow(passed) < 1) {
     idx <- list(
-      schemaVersion = 1,
+      schemaVersion = 2,
       generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
       counts = list(
         nModelsTotal = nrow(ms),
         nModelsPassed = 0L,
         nModelsWithTrainingShap = 0L,
         nTrainingSamples = 0L,
-        nRows = 0L
+        nRows = 0L,
+        nParts = 0L
       ),
       artifacts = list(
-        training_shap_long = basename(out_csv_path),
+        training_shap_long_dir = basename(out_dir),
         training_shap_index = basename(out_index_path)
       ),
       models = list()
     )
     jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
-    if (isTRUE(verbose)) {
-      message(glue("[powerup] aggregate_training_shap: no passing models; wrote empty {out_csv_path} and {out_index_path}"))
-    }
-    return(invisible(list(ok = TRUE, outputs = list(csv = out_csv_path, index = out_index_path), counts = idx$counts)))
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: no passing models; wrote empty index {out_index_path}"))
+    return(invisible(list(ok = TRUE, outputs = list(dir = out_dir, index = out_index_path), counts = idx$counts)))
   }
 
+  # ---- Process each passing model deterministically ----
   for (i in seq_len(nrow(passed))) {
     mk <- passed$modelKey[[i]]
     jobId_i <- passed$jobId[[i]]
     pert <- passed$perturbation[[i]]
-
     shap_path <- resolve_shap_train_path(passed$shapTrainPath[[i]], mk)
 
     idx_rec <- list(
@@ -1673,104 +1737,145 @@ powerup_aggregate_training_shap <- function(
     )
 
     if (!file.exists(shap_path)) {
-      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: missing shap_train.csv; modelKey={mk} path={shap_path}"))
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: missing shap_train.parquet modelKey={mk} path={shap_path}"))
       index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
-    dt <- tryCatch(
-      data.table::fread(shap_path, data.table = FALSE, showProgress = FALSE),
+    # Read parquet as Arrow Table (columnar)
+    tab <- tryCatch(
+      arrow::read_parquet(shap_path, as_data_frame = FALSE),
       error = function(e) e
     )
-
-    if (inherits(dt, "error") || is.null(dt) || nrow(dt) < 1) {
-      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: empty/invalid shap_train.csv; modelKey={mk} path={shap_path}"))
-      if (inherits(dt, "error")) {
-        idx_rec$error <- list(type = class(dt)[1], message = conditionMessage(dt))
-      }
+    if (inherits(tab, "error") || is.null(tab) || tab$num_rows < 1) {
+      if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: empty/invalid shap_train.parquet modelKey={mk} path={shap_path}"))
+      if (inherits(tab, "error")) idx_rec$error <- list(type = class(tab)[1], message = conditionMessage(tab))
       index_models[[length(index_models) + 1L]] <- idx_rec
       next
     }
 
-    # Normalize ID col
-    if (!("cell_line" %in% colnames(dt))) {
-      colnames(dt)[1] <- "cell_line"
+    cols <- tab$ColumnNames
+    if (length(cols) < 2) {
+      idx_rec$error <- list(type = "SchemaError", message = "shap_train.parquet must have cell_line + >=1 feature columns")
+      index_models[[length(index_models) + 1L]] <- idx_rec
+      next
     }
-    dt$cell_line <- as.character(dt$cell_line)
 
-    # Deterministic row order
-    dt <- dt %>% dplyr::filter(!is.na(.data$cell_line), trimws(.data$cell_line) != "") %>% dplyr::arrange(.data$cell_line)
+    # Determine cell_line column
+    cell_col <- if ("cell_line" %in% cols) {
+      "cell_line"
+    } else if ("cellLine" %in% cols) {
+      "cellLine"
+    } else {
+      cols[[1]]
+    }
 
-    fields <- colnames(dt)
-    feature_cols <- setdiff(fields, "cell_line")
+    feature_cols <- setdiff(cols, cell_col)
 
     # Deterministic feature order: (Intercept) first then alphabetical
     feats <- sort(feature_cols)
-    if ("(Intercept)" %in% feats) {
-      feats <- c("(Intercept)", setdiff(feats, "(Intercept)"))
-    }
+    if ("(Intercept)" %in% feats) feats <- c("(Intercept)", setdiff(feats, "(Intercept)"))
+
+    # Exclude intercept rows from output (align with worker behavior)
+    feats_out <- setdiff(feats, "(Intercept)")
 
     idx_rec$trainingShapSchema <- list(
-      format = "wide",
-      cell_col = "cell_line",
+      format = "wide_parquet",
+      cell_col = cell_col,
       n_features = length(feats),
       feature_preview = head(feats, 25),
-      columns = fields
+      columns = cols
     )
+
+    # Convert to data.frame in manageable chunks using batches
+    # NOTE: read_parquet returns a Table; to_batches() yields record batches.
+    batches <- tab$to_batches()
 
     any_rows <- FALSE
 
-    # Stream melt
-    for (r in seq_len(nrow(dt))) {
-      cl <- dt$cell_line[[r]]
-      train_samples_seen[[cl]] <- TRUE
+    for (b in batches) {
+      df <- as.data.frame(b)
 
-      for (feat in feats) {
-        val <- dt[[feat]][[r]]
-        if (is.null(val) || is.na(val)) next
+      # Normalize cell_line values
+      if (!(cell_col %in% names(df))) next
+      cl_vec <- as.character(df[[cell_col]])
+      cl_vec <- trimws(cl_vec)
+      keep_cl <- !is.na(cl_vec) & nzchar(cl_vec)
+      if (!any(keep_cl)) next
 
-        sval <- as.character(val)
-        if (!nzchar(trimws(sval))) next
+      # Track training samples
+      for (cl in cl_vec[keep_cl]) train_samples_seen[[cl]] <- TRUE
 
-        line <- paste(
-          csv_escape(jobId_i),
-          csv_escape(mk),
-          csv_escape(pert),
-          csv_escape(cl),
-          csv_escape(feat),
-          csv_escape(sval),
-          sep = ","
-        )
-        writeLines(line, con = out_con)
-        n_written <- n_written + 1L
-        any_rows <- TRUE
-      }
+      # Melt to long using data.table for speed
+      dt <- data.table::as.data.table(df)
+      data.table::setnames(dt, cell_col, "cell_line")
+
+      # Keep only rows with valid cell_line
+      dt <- dt[keep_cl]
+
+      # Melt only feature columns we will output
+      # (this avoids intercept and avoids melting unknown extra cols)
+      melt_cols <- intersect(feats_out, names(dt))
+      if (length(melt_cols) < 1) next
+
+      long_dt <- data.table::melt(
+        dt,
+        id.vars = "cell_line",
+        measure.vars = melt_cols,
+        variable.name = "feature",
+        value.name = "shap_value",
+        variable.factor = FALSE
+      )
+
+      # Coerce + filter: keep only abs(shap_value) > 0
+      suppressWarnings(long_dt[, shap_value := as.numeric(shap_value)])
+      long_dt <- long_dt[!is.na(shap_value) & abs(shap_value) > 0]
+
+      if (nrow(long_dt) < 1) next
+
+      out_df <- data.frame(
+        jobId = rep(jobId_i, nrow(long_dt)),
+        modelKey = rep(mk, nrow(long_dt)),
+        perturbation = rep(pert, nrow(long_dt)),
+        cell_line = as.character(long_dt$cell_line),
+        feature = as.character(long_dt$feature),
+        shap_value = as.numeric(long_dt$shap_value),
+        stringsAsFactors = FALSE
+      )
+
+      append_rows(out_df)
+      any_rows <- TRUE
     }
 
     if (any_rows) {
       idx_rec$hasTrainingShap <- TRUE
-      n_models_with_train_shap <- n_models_with_train_shap + 1L
+      n_models_with_training_shap <- n_models_with_training_shap + 1L
     }
 
     index_models[[length(index_models) + 1L]] <- idx_rec
 
-    if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: aggregated modelKey={mk} rows_written_so_far={n_written}"))
+    if (isTRUE(verbose)) message(glue("[powerup] aggregate_training_shap: processed modelKey={mk}"))
   }
 
+  # Flush remaining buffered rows
+  flush_part()
+
   n_train_samples <- length(ls(train_samples_seen, all.names = TRUE))
+  n_parts <- length(list.files(out_dir, pattern = "^part-[0-9]+\\.parquet$"))
 
   idx <- list(
-    schemaVersion = 1,
+    schemaVersion = 2,
     generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
     counts = list(
       nModelsTotal = nrow(ms),
       nModelsPassed = nrow(passed),
-      nModelsWithTrainingShap = n_models_with_train_shap,
+      nModelsWithTrainingShap = n_models_with_training_shap,
       nTrainingSamples = n_train_samples,
-      nRows = n_written
+      nRows = n_rows_total,
+      nParts = n_parts
     ),
     artifacts = list(
-      training_shap_long = basename(out_csv_path),
+      training_shap_long_dir = basename(out_dir),
       training_shap_index = basename(out_index_path)
     ),
     models = index_models
@@ -1779,13 +1884,14 @@ powerup_aggregate_training_shap <- function(
   jsonlite::write_json(idx, out_index_path, auto_unbox = TRUE, pretty = TRUE)
 
   if (isTRUE(verbose)) {
-    message(glue("[powerup] aggregate_training_shap: wrote {out_csv_path} rows={n_written} models_passed={nrow(passed)} models_with_training_shap={n_models_with_train_shap} training_samples={n_train_samples}"))
+    message(glue("[powerup] aggregate_training_shap: wrote {out_dir} parts={n_parts} rows={n_rows_total} models_passed={nrow(passed)} models_with_shap={n_models_with_training_shap} training_samples={n_train_samples}"))
     message(glue("[powerup] aggregate_training_shap: wrote {out_index_path} models_indexed={length(index_models)}"))
   }
 
   invisible(list(
     ok = TRUE,
-    outputs = list(csv = out_csv_path, index = out_index_path),
+    outputs = list(dir = out_dir, index = out_index_path),
     counts = idx$counts
   ))
 }
+

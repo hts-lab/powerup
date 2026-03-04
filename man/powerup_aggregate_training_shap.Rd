@@ -8,13 +8,15 @@ powerup_aggregate_training_shap(
   out_aggregates_dir,
   models_dir,
   model_status_path = file.path(out_aggregates_dir, "model_status.csv"),
-  output_filename = "training_shap_long.csv",
+  output_filename = "training_shap_long",
   index_filename = "training_shap_index.json",
-  verbose = TRUE
+  verbose = TRUE,
+  part_rows = 500000L
 )
 }
 \description{
-Reads per-model shap_train.csv (WIDE) and writes a single long CSV plus a JSON index.
+Reads per-model shap_train.parquet (WIDE) and writes a LONG parquet "dataset"
+as multiple part files + a JSON index.
 }
 \details{
 Passing models:
@@ -26,13 +28,22 @@ Passing models:
 Determinism:
 \itemize{
 \item Models processed in sorted(modelKey) order.
-\item cell_line sorted within each model.
+\item cell_line order preserved within each parquet batch (arrow batch order).
 \item Features ordered with "(Intercept)" first (if present), then alphabetical.
 }
 
-Outputs (written to out_aggregates_dir):
+Filtering:
 \itemize{
-\item training_shap_long.csv
+\item Keeps ONLY abs(shap_value) > 0 (non-zero)
+\item Excludes "(Intercept)" from output rows (consistent with worker finalize melt)
+}
+
+Outputs:
+\itemize{
+\item A directory under out_aggregates_dir: <output_basename>/
+\itemize{
+\item part-00001.parquet, part-00002.parquet, ...
+}
 \item training_shap_index.json
 }
 }
