@@ -31,6 +31,16 @@ powerup_write_json <- function(path, obj) {
 
 # ---- internal helpers (package-private) ----
 
+
+.pu_write_parquet_required <- function(df, path) {
+  if (!requireNamespace("arrow", quietly = TRUE)) {
+    stop(glue::glue("[powerup] arrow R package is required to write parquet: {path}"))
+  }
+  arrow::write_parquet(df, path, compression = "zstd", use_dictionary = TRUE)
+  TRUE
+  }
+
+
 .pu_assert_file_exists <- function(path, label) {
   if (!is.character(path) || length(path) != 1 || nchar(path) < 1) {
     stop(glue("{label} must be a non-empty string"))
@@ -856,15 +866,6 @@ powerup_train_models <- function(
         readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
 
         # 3) SHAP extraction
-        .pu_write_parquet_required <- function(df, path) {
-          if (!requireNamespace("arrow", quietly = TRUE)) {
-            stop(glue::glue("[powerup] arrow R package is required to write parquet: {path}"))
-          }
-          arrow::write_parquet(df, path)
-          TRUE
-        }
-
-
         stage <- "SHAP_USER: extract fit_user$new_data$shap_values"
         shap_user_df <- tryCatch({
           fit_user$new_data$shap_values %>%
