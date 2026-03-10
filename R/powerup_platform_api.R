@@ -789,10 +789,10 @@ powerup_train_models <- function(
         modelKey = mk,
         perturbation = perturbation,
         mean_r = if (!is.null(fit$scores)) mean(fit$scores, na.rm = TRUE) else NA_real_,
-        mean_r2 = if (!is.null(fit$scores)) mean(fit$scores^2, na.rm = TRUE) else NA_real_,
+        mean_r2 = if (!is.null(fit$scores_R2)) mean(fit$scores_R2, na.rm = TRUE) else NA_real_,
         mean_rmse = if (!is.null(fit$scores_rmse)) mean(fit$scores_rmse, na.rm = TRUE) else NA_real_,
         n_scores = if (!is.null(fit$scores)) length(fit$scores) else 0L,
-        skipped = is.null(fit$model) # fit will only return a model if it passes min_score
+        skipped = is.null(fit$model)
       )
       powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
