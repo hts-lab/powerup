@@ -926,7 +926,7 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
                                    n_threads = 4,
                                    use_gpu = TRUE, gpu_id = c(0), seed = 123, path = NULL){
   
-  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] We will start fitting models for {length(perturbs)} perturbations.
+  show_msg(glue::glue("[{lubridate::now('America/New_York')}] We will start fitting models for {length(perturbs)} perturbations.
     Data will be stored at  {path}/results"))
   
   
@@ -947,7 +947,7 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
   big_chunk_count = 0
   for (this_big_chunk in big_chunks){
     big_chunk_count = big_chunk_count + 1
-    show_msg("[{lubridate::now('US/Eastern')}] Processing {big_chunk_count} of {splits} - STARTED")
+    show_msg("[{lubridate::now('America/New_York')}] Processing {big_chunk_count} of {splits} - STARTED")
     future::plan(multisession, workers = 8)
     fit_models_in_parallel(perturbs = this_big_chunk, 
                            chunk_size = chunk_size,
@@ -960,13 +960,13 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
                            n_threads = n_threads,
                            use_gpu = use_gpu, gpu_id = gpu_id)
     future::plan(sequential)
-    show_msg("[{lubridate::now('US/Eastern')}] Processing {big_chunk_count} of {splits} - DONE")
+    show_msg("[{lubridate::now('America/New_York')}] Processing {big_chunk_count} of {splits} - DONE")
     
   }
   
   
   
-  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] Done fitting models in parallel. Merging outputs...
+  show_msg(glue::glue("[{lubridate::now('America/New_York')}] Done fitting models in parallel. Merging outputs...
     Data will be stored at  {path}/results"))
   
   
@@ -983,12 +983,12 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
   }
   
   
-  show_msg(glue::glue("[{lubridate::now('US/Eastern')}] Done fitting models in parallel. Saving...
+  show_msg(glue::glue("[{lubridate::now('America/New_York')}] Done fitting models in parallel. Saving...
     Data will be stored at {path}/results/models.rds"))
   
   saveRDS(all_chunks,glue::glue("{path}/results/models.rds"))
   
-  show_msg(glue("[{lubridate::now('US/Eastern')}] Done. The overall average model accuracy (r) was {all_chunks %>% purrr::map('scores') %>% purrr::map(mean) %>% unlist() %>% mean()}"))
+  show_msg(glue("[{lubridate::now('America/New_York')}] Done. The overall average model accuracy (r) was {all_chunks %>% purrr::map('scores') %>% purrr::map(mean) %>% unlist() %>% mean()}"))
   
   return("Done")
   
