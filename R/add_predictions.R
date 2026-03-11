@@ -28,14 +28,12 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   }
 
   coerce_numeric_matrix <- function(df) {
-    # Prevent as.matrix(data.frame) from turning everything into character
     for (nm in colnames(df)) {
       x <- df[[nm]]
       if (is.factor(x)) x <- as.character(x)
 
       if (is.character(x)) {
         suppressWarnings(x_num <- as.numeric(x))
-        # if there are any non-NA original values but numeric is all NA => unsafe conversion
         if (all(is.na(x_num)) && any(!is.na(x))) {
           stop(glue::glue("new_data column '{nm}' is character and cannot be safely converted to numeric."))
         }
@@ -53,16 +51,13 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     m
   }
 
-  # Robustly extract feature names from the fitted booster
   get_xgb_feature_names <- function(booster) {
-    # Preferred: attribute "feature_names" (most consistent)
     attrs <- tryCatch(xgboost::xgb.attributes(booster), error = function(e) NULL)
     if (!is.null(attrs) && "feature_names" %in% names(attrs)) {
       fn <- attrs[["feature_names"]]
       if (!is.null(fn) && length(fn) > 0) return(fn)
     }
 
-    # Sometimes stored directly
     if (!is.null(booster$feature_names) && length(booster$feature_names) > 0) {
       return(booster$feature_names)
     }
@@ -70,9 +65,6 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     stop("Unable to determine feature names from model$model (xgboost booster).")
   }
 
-  # ----
-  # SHAP for xgboost boosters via predcontrib (exact for trees)
-  # ----
   get_xgb_shap_predcontrib <- function(booster, X_mat, sample_names) {
     dm <- xgboost::xgb.DMatrix(data = X_mat)
 
@@ -90,7 +82,6 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
       }
     }
 
-    # Fallback: last column is bias
     if (is.na(bias_idx) || length(bias_idx) == 0) {
       bias_idx <- ncol(phis)
     }
@@ -98,7 +89,6 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     bias <- phis[, bias_idx]
     shap <- phis[, -bias_idx, drop = FALSE]
 
-    # Ensure feature names match X
     if (!is.null(colnames(X_mat))) {
       colnames(shap) <- colnames(X_mat)
     }
@@ -106,7 +96,6 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     shap_df <- as.data.frame(shap, check.names = FALSE)
     rownames(shap_df) <- sample_names
 
-    # feature importance table: sum abs shap per feature
     vals <- apply(shap, 2, function(x) sum(abs(x), na.rm = TRUE))
     contrib <- tibble::tibble(
       term = colnames(shap),
@@ -123,19 +112,20 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
     )
   }
 
-
   # -----------------------------
   # start
   # -----------------------------
-  cat(glue::glue("[{lubridate::now('America/New_York')}] Making predictions for {name} ({indx} of {total}) .."), sep = "\n")
+  cat(glue::glue("[{lubridate::now('US/Eastern')}] Making predictions for {name} ({indx} of {total}) .."), sep = "\n")
   flush.console()
 
   if (!is.data.frame(new_data)) new_data <- as.data.frame(new_data, check.names = FALSE)
   new_data <- ensure_rownames(new_data)
 
-  # Keep only the features needed by the model
   if (is.null(model) || is.null(model$model) || !inherits(model$model, "xgb.Booster")) {
     stop("model$model must be an xgboost Booster (xgb.Booster).")
+  }
+  if (is.null(model$error_model) || !inherits(model$error_model, "xgb.Booster")) {
+    stop("model$error_model must be an xgboost Booster (xgb.Booster).")
   }
 
   feat <- NULL
@@ -151,64 +141,113 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   }
   new_data <- new_data[, feat, drop = FALSE]
 
-  # Convert to numeric matrix + DMatrix
   X_mat <- coerce_numeric_matrix(new_data)
   new_data_dm <- xgboost::xgb.DMatrix(X_mat)
 
-  # Make predictions and error estimates for each sample
-  predictions <- as.numeric(stats::predict(model$model, new_data_dm))
-  error <- as.numeric(stats::predict(model$error_model, new_data_dm))
+  # -----------------------------
+  # Mean prediction
+  # -----------------------------
+  pred_mean <- as.numeric(stats::predict(model$model, new_data_dm))
+
+  # -----------------------------
+  # Variance prediction
+  # error_model predicts log( squared_error + eps )
+  # -----------------------------
+  variance_epsilon <- if (!is.null(model$variance_epsilon)) as.numeric(model$variance_epsilon) else 1e-8
+  min_variance <- if (!is.null(model$min_variance)) as.numeric(model$min_variance) else 1e-8
+  z95 <- 1.959963984540054
+
+  pred_log_var <- as.numeric(stats::predict(model$error_model, new_data_dm))
+  pred_var <- pmax(exp(pred_log_var), min_variance)
+  pred_sd <- sqrt(pred_var)
+
+  pred_pi_lower_95 <- pred_mean - z95 * pred_sd
+  pred_pi_upper_95 <- pred_mean + z95 * pred_sd
+
+  # -----------------------------
+  # Threshold-based event probabilities
+  # -----------------------------
+  response_cutoff <- if (!is.null(model$response_cutoff)) as.numeric(model$response_cutoff) else NA_real_
+  decreasing <- if (!is.null(model$decreasing)) isTRUE(model$decreasing) else FALSE
+
+  prob_below_cutoff <- rep(NA_real_, length(pred_mean))
+  prob_above_cutoff <- rep(NA_real_, length(pred_mean))
+  prob_target_event <- rep(NA_real_, length(pred_mean))
+  target_event_definition <- NA_character_
+
+  if (!is.na(response_cutoff)) {
+    standardized <- (response_cutoff - pred_mean) / pred_sd
+    prob_below_cutoff <- stats::pnorm(standardized)
+    prob_above_cutoff <- 1 - prob_below_cutoff
+
+    if (decreasing) {
+      prob_target_event <- prob_below_cutoff
+      target_event_definition <- "P(y <= cutoff)"
+    } else {
+      prob_target_event <- prob_above_cutoff
+      target_event_definition <- "P(y >= cutoff)"
+    }
+  }
 
   sample_names <- rownames(new_data)
-  names(predictions) <- sample_names
-  names(error) <- sample_names
+  names(pred_mean) <- sample_names
+  names(pred_var) <- sample_names
+  names(pred_sd) <- sample_names
+  names(pred_log_var) <- sample_names
+  names(pred_pi_lower_95) <- sample_names
+  names(pred_pi_upper_95) <- sample_names
+  names(prob_below_cutoff) <- sample_names
+  names(prob_above_cutoff) <- sample_names
+  names(prob_target_event) <- sample_names
 
-  # Explain predictions (BYPASS fastshap completely)
+  # Explain predictions
   shap <- get_xgb_shap_predcontrib(model$model, X_mat, sample_names)
 
-  # ------------------------------------------------------------
-  # Include SHAP bias as a special "feature" column in shap_values
-  # so downstream plotting can reconstruct:
-  #   pred ≈ (Intercept) + sum(feature SHAP)
-  #
-  # We name it exactly "(Intercept)" for consistency with common
-  # SHAP conventions. Keep check.names=FALSE so parentheses remain.
-  # ------------------------------------------------------------
   shap_values_df <- shap$shap_values
   if (!is.data.frame(shap_values_df)) {
     shap_values_df <- as.data.frame(shap_values_df, check.names = FALSE)
   }
 
-  # Ensure rownames match sample_names (defensive)
   if (is.null(rownames(shap_values_df)) || length(rownames(shap_values_df)) != length(sample_names)) {
     rownames(shap_values_df) <- sample_names
   }
 
-  # Add bias column as "(Intercept)"
   shap_values_df[["(Intercept)"]] <- as.numeric(shap$shap_bias)
 
-  # Deterministic column order: put intercept first, then features in their existing order
   cols <- colnames(shap_values_df)
   cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
   shap_values_df <- shap_values_df[, cols, drop = FALSE]
 
-  # Replace shap_values stored on model with the augmented version
   model$new_data$shap_values <- shap_values_df
 
-
-
-  # Attach new data outputs to the original model
+  # Attach new data outputs
   model$new_data$data <- new_data
-  model$new_data$predictions <- predictions
-  model$new_data$predictions_error <- error
+
+  # legacy compatibility
+  model$new_data$predictions <- pred_mean
+  model$new_data$predictions_error <- pred_sd
+
+  # new richer outputs
+  model$new_data$pred_mean <- pred_mean
+  model$new_data$pred_var <- pred_var
+  model$new_data$pred_sd <- pred_sd
+  model$new_data$pred_log_var <- pred_log_var
+  model$new_data$pred_pi_lower_95 <- pred_pi_lower_95
+  model$new_data$pred_pi_upper_95 <- pred_pi_upper_95
+  model$new_data$prob_below_cutoff <- prob_below_cutoff
+  model$new_data$prob_above_cutoff <- prob_above_cutoff
+  model$new_data$prob_target_event <- prob_target_event
+  model$new_data$target_event_definition <- target_event_definition
+  model$new_data$response_cutoff <- response_cutoff
+  model$new_data$decreasing <- decreasing
 
   model$new_data$feature_contribution <- shap$shap_table
   model$new_data$important_features <- shap$good_terms
-  #model$new_data$shap_values <- shap$shap_values (see above)
   model$new_data$shap_bias <- shap$shap_bias
 
   return(model)
 }
+
 
 
 #' Use a batch of models to make predictions on new data

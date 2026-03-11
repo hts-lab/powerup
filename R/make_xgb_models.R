@@ -37,98 +37,86 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
                             xgb_params = NULL,
                             cor_data = NULL, cor_n_features = 1000,
                             use_gpu = TRUE, gpu_id = 0){
-  
+
   cat(glue::glue("[{lubridate::now('America/New_York')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
-  
-  
+
+  # Small epsilon for variance modeling
+  variance_epsilon <- 1e-8
+  min_variance <- 1e-8
+  normal_z_95 <- 1.959963984540054
+
   # This keeps one column of dependency scores (renamed 'y_value') plus all predictors
   prepare_model_data <- function(perturbation, data, tag = "ko_", response_cutoff = 0.75, nfolds = 3, nrepeats = 3, cor_data = NULL, cor_num = 1000){
-    
-    if (is.null(cor_data)){
-      
+
+    if (is.null(cor_data)) {
+
       prepared_data <- data %>%
         dplyr::mutate(y_value = get(perturbation)) %>% 
         dplyr::select(-dplyr::starts_with(tag)) %>%
         stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
-      
+
     } else {
-      
-      # Check if the perturbation is in the correlation matrix or skip
+
       correlated_features <- NULL
-      
+
       if (perturbation %in% colnames(cor_data)){
-        
+
         correlated_features <- cor_data %>%
           dplyr::top_n(cor_num, abs(get(perturbation))) %>%
           dplyr::pull(feature)
-        
+
       }
 
-      
-      # if no features then use all features
       if (!is.null(correlated_features) & length(correlated_features) > 0) {
-        
+
         prepared_data <- data %>%
           dplyr::mutate(y_value = get(perturbation)) %>% 
           dplyr::select(-dplyr::starts_with(tag)) %>%
           dplyr::select(y_value, dplyr::any_of(correlated_features))  %>%
           stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
-        
+
       } else {
-        
+
         prepared_data <- data %>%
           dplyr::mutate(y_value = get(perturbation)) %>% 
           dplyr::select(-dplyr::starts_with(tag)) %>%
           stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
-        
-      }
-      
 
-      
-      
+      }
     }
- 
-    
-    # Create a response column to help stratify cases
-    prepared_data <- prepared_data %>% tibble::column_to_rownames("cell_line") %>% dplyr::mutate(response = y_value > response_cutoff)
-    
-    # Note: We are using the full data as there is no tuning right now.
+
+    prepared_data <- prepared_data %>%
+      tibble::column_to_rownames("cell_line") %>%
+      dplyr::mutate(response = y_value > response_cutoff)
+
     data_folds <- rsample::vfold_cv(prepared_data, v = nfolds, strata = y_value, repeats = nrepeats, breaks = 20, pool = 0.05)
-    
+
     output <- list()
     output$original_data <- prepared_data
     output$dfolds <- data_folds
-    
+
     return(output)
-    
   }
-  
-  
+
   # This creates an object that stores model parameters
-  # Ideally this is tuning the parameters but we skip this for now
   prepare_model_params <- function(data, xgb_params){
-    
+
     if (is.null(xgb_params)) xgb_params <- list()
 
     params <- list()
     params$booster <- "gbtree"
     params$objective <- "reg:squarederror"
-    
-    
-    # These parameters seem to do OK on average for all perturbations
-    params$eta <- 0.04 # 0.04
-    params$gamma <- 0 # 0.01
+
+    params$eta <- 0.04
+    params$gamma <- 0
     params$alpha <- 0.35
     params$lambda <- 0.7
-    #params$max_depth = 3
-    # params$subsample = 1
     params$sampling_method = "gradient_based"
     params$colsample_bytree = 1
-    params$colsample_bylevel = 0.2 # 0.2
-    params$colsample_bynode = 0.8 # 0.8
-    
-    # If user provided other params, overwrite the baseline
+    params$colsample_bylevel = 0.2
+    params$colsample_bynode = 0.8
+
     if (is.null(xgb_params$eta)) params$eta <- 0.04 else params$eta <- xgb_params$eta
     if (is.null(xgb_params$gamma)) params$gamma <- 0 else params$gamma <- xgb_params$gamma
     if (is.null(xgb_params$alpha)) params$alpha <- 0.35 else params$alpha <- xgb_params$alpha
@@ -136,204 +124,149 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     if (is.null(xgb_params$colsample_bytree)) params$colsample_bytree <- 1 else params$colsample_bytree <- xgb_params$colsample_bytree
     if (is.null(xgb_params$colsample_bylevel)) params$colsample_bylevel <- 0.2 else params$colsample_bylevel <- xgb_params$colsample_bylevel
     if (is.null(xgb_params$colsample_bynode)) params$colsample_bynode <- 0.8 else params$colsample_bynode <- xgb_params$colsample_bynode
-    
+
     return(params)
-    
   }
-  
+
   # This calculates weights per case based on response
   get_weights <- function(y_value, response_cutoff, weight_cap = 0.05){
-    
-    # If all samples are above/below the cutoff, return equal weights
+
     if (weight_cap == 0 || sum(y_value >= response_cutoff) == 0 || sum(y_value < response_cutoff) == 0){
-      return(rep(1/length(y_value),times=length(y_value)))
+      return(rep(1/length(y_value), times = length(y_value)))
     }
-    
-    # We count how many cases we have of each response 'status'
+
     status_counts <- table(dplyr::if_else(y_value >= response_cutoff, "A", "B"))
-    
-    # Decide the majority group
     status_major_count <- dplyr::if_else(status_counts["A"] > status_counts["B"], status_counts["A"], status_counts["B"])
-    
-    # We calculate the weight of an individual sensitivity status
-    status_weight <- 1/status_counts
-    
-    # We assign the weight to each observation based on observed sensitivity
+    status_weight <- 1 / status_counts
+
     weights <- dplyr::if_else(y_value > response_cutoff, status_weight["A"], status_weight["B"])
-    
-    # We normalize so that total weights add up to 1
-    weights <- weights/sum(weights)
-    
-    # We cap each observation's individual weight at weight_cap
+    weights <- weights / sum(weights)
     weights <- dplyr::if_else(weights > weight_cap, weight_cap, weights)
-    
-    # We redistribute the 'lost' weight from the capping step to the remaining samples
-    leftover_weight <- (1 - sum(weights))/status_major_count
+
+    leftover_weight <- (1 - sum(weights)) / status_major_count
     weights <- dplyr::if_else(weights == weight_cap, weight_cap, weights + leftover_weight)
-    
+
     return(weights)
-    
   }
-  
-  # This resamples the given data slice     
-  get_weighted_set <- function(data, weights){
-    
-    data <- data %>%
-      dplyr::slice_sample(prop = 1,
-                   replace = TRUE, 
-                   weight_by = weights
-      )
-    
-    
-    return(data)
-    
-  }
-  
+
   # This puts the data in DMatrix format for xgboost
-  # Optional: To generate a null model we can shuffle the outcome here
   get_DMatrix <- function(data, weights = NULL, shuffle = FALSE){
-    
+
     x_df <- data %>% dplyr::select(-"y_value", -"response")
     x_values <- as.matrix(x_df)
     storage.mode(x_values) <- "double"
+
     y_values <- data %>% dplyr::pull(y_value)
     if (shuffle) y_values <- sample(y_values)
-    if(!is.null(weights)){
-      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values, weight = 1000*weights) 
+
+    if (!is.null(weights)) {
+      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values, weight = 1000 * weights)
     } else {
-      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values) 
+      data <- xgboost::xgb.DMatrix(data = x_values, label = y_values)
     }
-    
-    
+
     return(data)
   }
 
+  # This calculates SHAP values
+  get_xgb_shap <- function(model, X, sample_names = NULL) {
+    cat("[SHAP] ENTER get_xgb_shap\n")
+    flush.console()
 
+    X_mat <- as.matrix(X)
+    storage.mode(X_mat) <- "double"
 
-# This calculates SHAP values
-get_xgb_shap <- function(model, X, sample_names = NULL) {
-  cat("[SHAP] ENTER get_xgb_shap\n")
-  flush.console()
+    if (!inherits(model, "xgb.Booster")) {
+      stop("get_xgb_shap currently supports xgb.Booster only (fastshap bypass).")
+    }
 
-  X_mat <- as.matrix(X)
-  storage.mode(X_mat) <- "double"
+    cat("[SHAP] Using xgboost predcontrib=TRUE (bypass fastshap)\n")
+    flush.console()
 
-  if (!inherits(model, "xgb.Booster")) {
-    stop("get_xgb_shap currently supports xgb.Booster only (fastshap bypass).")
+    dm <- xgboost::xgb.DMatrix(data = X_mat)
+    phis <- predict(model, dm, predcontrib = TRUE)
+    phis <- as.matrix(phis)
+
+    cn <- colnames(phis)
+    bias_idx <- NA_integer_
+    if (!is.null(cn)) {
+      if ("BIAS" %in% cn) bias_idx <- which(cn == "BIAS")[1]
+      if (is.na(bias_idx) && "(Intercept)" %in% cn) bias_idx <- which(cn == "(Intercept)")[1]
+    }
+    if (is.na(bias_idx)) bias_idx <- ncol(phis)
+
+    bias <- phis[, bias_idx]
+    shap <- phis[, -bias_idx, drop = FALSE]
+
+    if (is.null(sample_names)) {
+      sample_names <- rownames(X)
+    }
+    if (!is.null(sample_names)) {
+      rownames(shap) <- sample_names
+      names(bias) <- sample_names
+    }
+
+    if (!is.null(colnames(X_mat))) {
+      colnames(shap) <- colnames(X_mat)
+    }
+
+    shap_with_bias <- cbind(bias, shap)
+    colnames(shap_with_bias)[1] <- "(Intercept)"
+
+    shap_values_df <- data.frame(shap_with_bias, check.names = FALSE)
+
+    if (is.null(sample_names)) sample_names <- rownames(X)
+    if (!is.null(sample_names) && length(sample_names) == nrow(shap_values_df)) {
+      rownames(shap_values_df) <- sample_names
+    }
+
+    cols <- colnames(shap_values_df)
+    cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
+    shap_values_df <- shap_values_df[, cols, drop = FALSE]
+
+    vals <- apply(shap, 2, function(x) sum(abs(x), na.rm = TRUE))
+    contrib <- tibble::tibble(
+      term = colnames(shap),
+      value = as.numeric(vals)
+    ) %>% dplyr::arrange(dplyr::desc(.data$value))
+
+    pos_terms <- contrib %>% dplyr::filter(.data$value > 0) %>% dplyr::pull(.data$term)
+
+    cat(sprintf("[SHAP] predcontrib phis dim: %d x %d\n", nrow(phis), ncol(phis)))
+    cat(sprintf("[SHAP] shap dim (no bias): %d x %d\n", nrow(shap), ncol(shap)))
+    cat(sprintf("[SHAP] shap dim (WITH bias): %d x %d\n", nrow(shap_with_bias), ncol(shap_with_bias)))
+    cat("[SHAP] EXIT get_xgb_shap OK\n")
+    flush.console()
+
+    return(list(
+      shap_values = shap_values_df,
+      bias = bias,
+      shap_table = contrib,
+      good_terms = pos_terms
+    ))
   }
 
-  cat("[SHAP] Using xgboost predcontrib=TRUE (bypass fastshap)\n")
-  flush.console()
-
-  dm <- xgboost::xgb.DMatrix(data = X_mat)
-  phis <- predict(model, dm, predcontrib = TRUE)
-  phis <- as.matrix(phis)
-
-  cn <- colnames(phis)
-  bias_idx <- NA_integer_
-  if (!is.null(cn)) {
-    if ("BIAS" %in% cn) bias_idx <- which(cn == "BIAS")[1]
-    if (is.na(bias_idx) && "(Intercept)" %in% cn) bias_idx <- which(cn == "(Intercept)")[1]
-  }
-  if (is.na(bias_idx)) bias_idx <- ncol(phis)
-
-  bias <- phis[, bias_idx]
-  shap <- phis[, -bias_idx, drop = FALSE]
-
-  # set rownames
-  if (is.null(sample_names)) {
-    sample_names <- rownames(X)
-  }
-  if (!is.null(sample_names)) {
-    rownames(shap) <- sample_names
-    names(bias) <- sample_names
-  }
-
-  # Ensure feature names match X (for the non-bias part)
-  if (!is.null(colnames(X_mat))) {
-    colnames(shap) <- colnames(X_mat)
-  }
-
-  # --- store bias INSIDE shap_values as a canonical column "(Intercept)" ---
-  shap_with_bias <- cbind(bias, shap)
-  colnames(shap_with_bias)[1] <- "(Intercept)"
-
-  # Convert to data.frame NOW (match add_predictions.R behavior)
-  # Use data.frame(..., check.names=FALSE) (more reliable than as.data.frame.matrix for name preservation)
-  shap_values_df <- data.frame(shap_with_bias, check.names = FALSE)
-
-  # Preserve/ensure rownames
-  if (is.null(sample_names)) sample_names <- rownames(X)
-  if (!is.null(sample_names) && length(sample_names) == nrow(shap_values_df)) {
-    rownames(shap_values_df) <- sample_names
-  }
-
-  # Deterministic column order: intercept first, then all other features (existing order)
-  cols <- colnames(shap_values_df)
-  cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
-  shap_values_df <- shap_values_df[, cols, drop = FALSE]
-
-
-  # importance table (exclude intercept)
-  vals <- apply(shap, 2, function(x) sum(abs(x), na.rm = TRUE))
-  contrib <- tibble::tibble(
-    term = colnames(shap),
-    value = as.numeric(vals)
-  ) %>% dplyr::arrange(dplyr::desc(.data$value))
-
-  pos_terms <- contrib %>% dplyr::filter(.data$value > 0) %>% dplyr::pull(.data$term)
-
-  cat(sprintf("[SHAP] predcontrib phis dim: %d x %d\n", nrow(phis), ncol(phis)))
-  cat(sprintf("[SHAP] shap dim (no bias): %d x %d\n", nrow(shap), ncol(shap)))
-  cat(sprintf("[SHAP] shap dim (WITH bias): %d x %d\n", nrow(shap_with_bias), ncol(shap_with_bias)))
-  cat("[SHAP] EXIT get_xgb_shap OK\n")
-  flush.console()
-
-  return(list(
-    shap_values = shap_values_df,
-    bias = bias,
-    shap_table = contrib,
-    good_terms = pos_terms
-  ))
-}
-
-
-  
   # If the SD is zero, cor() will throw an error
   get_pseudo_cor <- function(x, y){
-    
+
     if (sd(x) == 0 | sd(y) == 0){
-      
       x[1] = x[1] + 1e-6
       y[1] = y[1] + 1e-6
-      
-    } else {
-      
-      # Do nothing
-      
     }
-    
-    return(cor(x,y))
-    
-    
+
+    return(cor(x, y))
   }
-  
-  
+
   get_rmse <- function(x, y){
-    return( sqrt( mean( (x - y)^2  ) ) )
+    return(sqrt(mean((x - y)^2)))
   }
-  
-  
+
   get_R2 <- function(x, y){
-    
-    return( 1 - sum( ( x - y )^2 )/sum( ( y - mean(y) )^2 ) )
-    
+    return(1 - sum((x - y)^2) / sum((y - mean(y))^2))
   }
-  
-  
-  # Binarized scores
+
   get_discrete_sensitivity <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -342,16 +275,15 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
 
-    
     TP = sum(pred_d & obs_d)
     FN = sum(!pred_d & obs_d)
-    
+
     result = TP / (TP + FN)
     return(result)
-    
   }
+
   get_discrete_specificity <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -359,15 +291,16 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
-    
+
     TN = sum(!pred_d & !obs_d)
     FP = sum(pred_d & !obs_d)
-    
+
     result = TN / (TN + FP)
     return(result)
   }
+
   get_discrete_fpr <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -375,16 +308,16 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
-    
+
     FP = sum(pred_d & !obs_d)
     TN = sum(!pred_d & !obs_d)
-    
+
     result = FP / (FP + TN)
     return(result)
-    
   }
+
   get_discrete_ppv <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -392,18 +325,16 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
-    
+
     TP = sum(pred_d & obs_d)
     FP = sum(pred_d & !obs_d)
-    TN = sum(!pred_d & !obs_d)
-    FN = sum(!pred_d & obs_d)
-    
+
     result = TP / (TP + FP)
     return(result)
-    
   }
+
   get_discrete_npv <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -411,18 +342,16 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
-    
-    TP = sum(pred_d & obs_d)
+
     FP = sum(pred_d & !obs_d)
     TN = sum(!pred_d & !obs_d)
-    FN = sum(!pred_d & obs_d)
-    
+
     result = TN / (TN + FP)
     return(result)
-    
   }
+
   get_discrete_accuracy <- function(pred, obs, discrete_cut, decreasing = F){
-    
+
     if (decreasing){
       pred_d = dplyr::if_else(pred <= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs <= discrete_cut, T, F)
@@ -430,60 +359,63 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       pred_d = dplyr::if_else(pred >= discrete_cut, T, F)
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
-    
+
     TP = sum(pred_d & obs_d)
     FP = sum(pred_d & !obs_d)
     TN = sum(!pred_d & !obs_d)
     FN = sum(!pred_d & obs_d)
-    
+
     result = (TP + TN) / (TP + FP + TN + FN)
     return(result)
   }
-  
-  
-  # Step 1: Prepare the data (keep only this perturbation's outcome values and split into folds)
-  model_data <- prepare_model_data(perturbation = perturbation, 
-                                   data = dataset, 
-                                   response_cutoff = response_cutoff, 
-                                   nfolds = nfolds, nrepeats = nrepeats,
-                                   cor_data = cor_data, cor_num = cor_n_features)
-  
+
+  # Step 1: Prepare the data
+  model_data <- prepare_model_data(
+    perturbation = perturbation,
+    data = dataset,
+    response_cutoff = response_cutoff,
+    nfolds = nfolds,
+    nrepeats = nrepeats,
+    cor_data = cor_data,
+    cor_num = cor_n_features
+  )
+
   # Step 2: Define parameters
   model_params <- prepare_model_params(data = model_data, xgb_params = xgb_params)
-  
+
+  oof_predictions_df <- NULL
+
   # Step 3: Assess current parameters with repeated k-fold CV
-  # Ideally we are tuning hyperparameters here
-  if(!skip_eval){
-    
+  if (!skip_eval){
+
     data_splits = model_data$dfolds$splits
-    
-    # Grab the analysis parts, for each: resample with bias, and create a training DMatrix
+
     training_sets <- purrr::map(data_splits, rsample::analysis)
-    
-    if(weight_cap > 0){    
-      training_weights <- training_sets %>% purrr::map(dplyr::pull, y_value) %>% purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
-      # training_matrices <- training_sets %>% map2(training_weights, get_weighted_set) %>% map(get_DMatrix)
-      training_matrices <- training_sets %>% purrr::map2(training_weights, get_DMatrix, shuffle = shuffle)
+
+    if (weight_cap > 0){
+      training_weights <- training_sets %>%
+        purrr::map(dplyr::pull, y_value) %>%
+        purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
+      training_matrices <- training_sets %>%
+        purrr::map2(training_weights, get_DMatrix, shuffle = shuffle)
     } else {
       training_matrices <- training_sets %>% purrr::map(get_DMatrix, shuffle = shuffle)
     }
-    
-    # Grab the assessment parts, for each: do as above + pull the y_values for later use
+
     validation_sets <- purrr::map(data_splits, rsample::assessment)
-    
-    if(weight_cap > 0){
-      validation_weights <- validation_sets %>% purrr::map(dplyr::pull, y_value) %>% purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
-      #  validation_matrices <- validation_sets %>% map2(validation_weights, get_weighted_set) 
-      validation_matrices <- validation_sets %>% purrr::map2(validation_weights, get_DMatrix) 
+
+    if (weight_cap > 0){
+      validation_weights <- validation_sets %>%
+        purrr::map(dplyr::pull, y_value) %>%
+        purrr::map(get_weights, response_cutoff = response_cutoff, weight_cap = weight_cap)
+      validation_matrices <- validation_sets %>% purrr::map2(validation_weights, get_DMatrix)
     } else {
       validation_matrices <- validation_sets %>% purrr::map(get_DMatrix)
     }
-    
-    validation_y_values <- purrr::map(validation_matrices, xgboost::getinfo, "label") #instead of pull and "y_value")
-    #validation_matrices <- map(validation_matrices, get_DMatrix)
-    
-    # Use the analysis subsets for creating a model, then use the assessment subset to make predictions and calculate correlation
-    # Build a stable params list for xgb.train()
+
+    validation_y_values <- purrr::map(validation_matrices, xgboost::getinfo, "label")
+    validation_sample_names <- purrr::map(validation_sets, rownames)
+
     cv_params <- model_params
     cv_params$max_depth <- max_depth
     cv_params$subsample <- f_subsample
@@ -505,7 +437,7 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
         )
       }
     )
-    
+
     pred_best <- function(model, dmat) {
       bi <- model$best_iteration
       if (!is.null(bi) && !is.na(bi)) {
@@ -514,52 +446,67 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       predict(model, dmat)
     }
 
-    score_predictions <-  purrr::map2(score_models, validation_matrices, pred_best)
-    
+    score_predictions <- purrr::map2(score_models, validation_matrices, pred_best)
+
+    # Build OOF prediction table for variance modeling
+    oof_predictions_df <- purrr::pmap_dfr(
+      list(
+        pred = score_predictions,
+        obs = validation_y_values,
+        cell_line = validation_sample_names,
+        fold_index = seq_along(score_predictions)
+      ),
+      function(pred, obs, cell_line, fold_index) {
+        tibble::tibble(
+          cell_line = as.character(cell_line),
+          pred = as.numeric(pred),
+          obs = as.numeric(obs),
+          fold_index = as.integer(fold_index)
+        )
+      }
+    )
+
     scores <- score_predictions %>% purrr::map2(validation_y_values, get_pseudo_cor) %>% unlist()
-    
     scores_rmse <- score_predictions %>% purrr::map2(validation_y_values, get_rmse) %>% unlist()
-    
     scores_R2 <- score_predictions %>% purrr::map2(validation_y_values, get_R2) %>% unlist()
-    
-    
-    # Discrete scores
+
     scores_d_sensitivity <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_sensitivity, response_cutoff, decreasing) %>% unlist()
     scores_d_specificity <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_specificity, response_cutoff, decreasing) %>% unlist()
     scores_d_fpr <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_fpr, response_cutoff, decreasing) %>% unlist()
     scores_d_ppv <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_ppv, response_cutoff, decreasing) %>% unlist()
     scores_d_npv <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_npv, response_cutoff, decreasing) %>% unlist()
     scores_d_accuracy <- score_predictions %>% purrr::map2(validation_y_values, get_discrete_accuracy, response_cutoff, decreasing) %>% unlist()
-    
-    
-    # Clean up
+
     rm(score_models)
     rm(data_splits)
     rm(training_matrices)
     rm(validation_matrices)
-    
-    
+
   } else {
-    
-    scores <- rep(1,9)
-    scores_R2 <- rep(1,9)
-    scores_rmse <- rep(0,9)
-    scores_d_sensitivity <- rep(1,9)
-    scores_d_specificity <- rep(1,9)
-    scores_d_fpr <- rep(1,9)
-    scores_d_ppv <- rep(1,9)
-    scores_d_npv <- rep(1,9)
-    scores_d_accuracy <- rep(1,9)
-    
-  }        
-  
-  
+
+    scores <- rep(1, 9)
+    scores_R2 <- rep(1, 9)
+    scores_rmse <- rep(0, 9)
+    scores_d_sensitivity <- rep(1, 9)
+    scores_d_specificity <- rep(1, 9)
+    scores_d_fpr <- rep(1, 9)
+    scores_d_ppv <- rep(1, 9)
+    scores_d_npv <- rep(1, 9)
+    scores_d_accuracy <- rep(1, 9)
+
+    # Fallback pseudo-OOF table if evaluation is skipped
+    oof_predictions_df <- tibble::tibble(
+      cell_line = rownames(model_data$original_data),
+      pred = as.numeric(model_data$original_data$y_value),
+      obs = as.numeric(model_data$original_data$y_value),
+      fold_index = 1L
+    )
+  }
+
   cat(glue::glue(" r = {round(mean(scores),3)} +/- {round(1.96*sd(scores),3)} | R2 = {round(mean(scores_R2),3)} +/- {round(1.96*sd(scores_R2),3)} | RMSE = {round(mean(scores_rmse),5)} | (n={length(scores)})"))
   flush.console()
-  
-  
-  # Prepare output
-  output <- list()  
+
+  output <- list()
   output$perturbation_name <- perturbation
   output$scores <- scores
   output$scores_R2 <- scores_R2
@@ -570,28 +517,30 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
   output$scores_d_ppv <- scores_d_ppv
   output$scores_d_npv <- scores_d_npv
   output$scores_d_accuracy <- scores_d_accuracy
-  
-  # If the score (R2) is good enough, we proceed with extra steps                                                                              
+  output$response_cutoff <- response_cutoff
+  output$decreasing <- decreasing
+  output$variance_epsilon <- variance_epsilon
+  output$min_variance <- min_variance
+  output$distribution_family <- "gaussian_oof_log_variance"
+
+  # If the score is good enough, proceed
   if (!is.na(mean(scores)) & mean(scores_R2) >= min_score){
-    
-    # Fit one last model using all data    
-    last_params <- model_params # Ideally we have found the best params and we set them here
-    last_nrounds <- nrounds # Ideally this has been tuned too
-    
-    last_weights <- model_data$original_data %>% dplyr::pull(y_value) %>% get_weights(response_cutoff = response_cutoff, weight_cap = weight_cap)
-    
+
+    last_params <- model_params
+    last_nrounds <- nrounds
+
+    last_weights <- model_data$original_data %>%
+      dplyr::pull(y_value) %>%
+      get_weights(response_cutoff = response_cutoff, weight_cap = weight_cap)
+
     if (weight_cap > 0){
-      #   last_matrix <-  get_weighted_set(model_data$original_data, last_weights) %>% get_DMatrix()
-      last_matrix <-  get_DMatrix(model_data$original_data, last_weights, shuffle = shuffle)
-    } else {   
+      last_matrix <- get_DMatrix(model_data$original_data, last_weights, shuffle = shuffle)
+    } else {
       last_matrix <- get_DMatrix(model_data$original_data, shuffle = shuffle)
     }
-    
-    
-    # We create a DMatrix using the original (non-resampled) data
+
     last_validation <- get_DMatrix(model_data$original_data)
-    
-    # We fit a last model
+
     final_params <- last_params
     final_params$max_depth <- max_depth
     final_params$subsample <- f_subsample
@@ -608,22 +557,51 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       early_stopping_rounds = 10,
       verbose = 0
     )
-        
-    # We collect the predictions on the same data
+
     last_predictions <- predict(last_model, newdata = last_validation)
     names(last_predictions) <- rownames(model_data$original_data)
-    
+
     null_prediction <- predict(last_model, newdata = last_matrix) %>% mean()
-    
-    # Create an error estimate
+
+    # In-sample residuals retained for debugging only
     errors <- (last_predictions - model_data$original_data$y_value)
     names(errors) <- rownames(model_data$original_data)
-    
-    # Create a matrix of errors vs features
-    error_data <- xgboost::xgb.DMatrix(data = model_data$original_data %>% dplyr::select(-"y_value",-"response") %>% as.matrix(),
-                              label = errors^2)
-    
-    # Fit a model on error (using default params)
+
+    # -----------------------------
+    # Variance model from OOF residuals
+    # -----------------------------
+    if (is.null(oof_predictions_df) || nrow(oof_predictions_df) < 2) {
+      stop(glue::glue("OOF predictions were not available to fit uncertainty model for {perturbation}"))
+    }
+
+    oof_var_df <- oof_predictions_df %>%
+      dplyr::mutate(
+        sq_error = (.data$pred - .data$obs)^2,
+        log_sq_error = log(.data$sq_error + variance_epsilon)
+      ) %>%
+      dplyr::group_by(.data$cell_line) %>%
+      dplyr::summarise(
+        y_value = mean(.data$log_sq_error, na.rm = TRUE),
+        response = FALSE,
+        .groups = "drop"
+      ) %>%
+      tibble::column_to_rownames("cell_line")
+
+    var_feature_df <- model_data$original_data %>%
+      dplyr::select(-"y_value", -"response") %>%
+      tibble::rownames_to_column("cell_line")
+
+    oof_var_df <- oof_var_df %>%
+      tibble::rownames_to_column("cell_line") %>%
+      dplyr::inner_join(var_feature_df, by = "cell_line") %>%
+      tibble::column_to_rownames("cell_line")
+
+    if (nrow(oof_var_df) < 10) {
+      stop(glue::glue("Too few OOF rows after joining features for uncertainty model: {nrow(oof_var_df)}"))
+    }
+
+    error_data <- get_DMatrix(oof_var_df, weights = NULL, shuffle = FALSE)
+
     err_params <- last_params
     err_params$max_depth <- max_depth
     err_params$subsample <- f_subsample
@@ -639,50 +617,52 @@ get_xgb_shap <- function(model, X, sample_names = NULL) {
       evals = list(train = error_data),
       verbose = 0
     )
-        
-    cat(glue::glue(" E = +/- {round(1.96*sqrt(mean(errors^2,na.rm=T)),3)}"), sep = "\n")
+
+    train_log_var_pred <- as.numeric(predict(error_model, newdata = last_validation))
+    train_pred_var <- pmax(exp(train_log_var_pred), min_variance)
+    train_pred_sd <- sqrt(train_pred_var)
+
+    cat(glue::glue(" E = +/- {round(1.96*mean(train_pred_sd, na.rm = TRUE), 3)}"), sep = "\n")
     flush.console()
-    
-    # Get feature contributions                                                                          
+
     X_feat <- model_data$original_data %>%
       dplyr::select(-"y_value", -"response") %>%
       as.matrix()
 
     shap <- get_xgb_shap(last_model, X_feat, sample_names = rownames(model_data$original_data))
-    
-    
-    # Finish preparing outputs
+
     output$model <- last_model
-    output$error_model <- error_model 
+    output$error_model <- error_model
     output$null_prediction <- null_prediction
+
+    # legacy + new training outputs
     output$predictions <- last_predictions
-    output$predictions_error <- errors
+    output$predictions_error <- train_pred_sd
+    output$predictions_var <- train_pred_var
+    output$predictions_log_var <- train_log_var_pred
+    output$predictions_residual <- errors
+    output$predictions_pi_lower_95 <- as.numeric(last_predictions - normal_z_95 * train_pred_sd)
+    output$predictions_pi_upper_95 <- as.numeric(last_predictions + normal_z_95 * train_pred_sd)
+
     output$feature_contribution <- shap$shap_table
     output$important_features <- shap$good_terms
     output$shap_values <- shap$shap_values
     output$shap_bias <- shap$bias
     output$sample_names <- rownames(model_data$original_data)
     output$feature_names <- colnames(X_feat)
-    
-    # Clean up
+
     rm(last_model)
     rm(error_model)
     rm(last_matrix)
     rm(shap)
     gc()
-    
-    # output$data <- model_data$original_data
-    
+
   } else {
-    
-    # This model isn't good enough, so we save some time and skip this step.
+
     cat(glue::glue(" Skipped"), sep = "\n")
     flush.console()
-    
-  }                                                                            
-  
-  
-  
+  }
+
   return(output)
 }
 

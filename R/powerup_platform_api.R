@@ -832,9 +832,21 @@ powerup_train_models <- function(
         })
 
         pred_test_tbl <- tibble::tibble(
-          cell_line = names(fit_test$new_data$predictions),
-          pred = as.numeric(fit_test$new_data$predictions),
-          pred_error = as.numeric(fit_test$new_data$predictions_error)
+          cell_line = names(fit_test$new_data$pred_mean),
+          pred = as.numeric(fit_test$new_data$pred_mean),                 # legacy-compatible alias
+          pred_error = as.numeric(fit_test$new_data$pred_sd),             # legacy-compatible alias
+          pred_mean = as.numeric(fit_test$new_data$pred_mean),
+          pred_var = as.numeric(fit_test$new_data$pred_var),
+          pred_sd = as.numeric(fit_test$new_data$pred_sd),
+          pred_log_var = as.numeric(fit_test$new_data$pred_log_var),
+          pred_pi_lower_95 = as.numeric(fit_test$new_data$pred_pi_lower_95),
+          pred_pi_upper_95 = as.numeric(fit_test$new_data$pred_pi_upper_95),
+          response_cutoff = as.numeric(fit_test$new_data$response_cutoff),
+          decreasing = as.logical(fit_test$new_data$decreasing),
+          prob_below_cutoff = as.numeric(fit_test$new_data$prob_below_cutoff),
+          prob_above_cutoff = as.numeric(fit_test$new_data$prob_above_cutoff),
+          prob_target_event = as.numeric(fit_test$new_data$prob_target_event),
+          target_event_definition = as.character(fit_test$new_data$target_event_definition)
         )
         readr::write_csv(pred_test_tbl, file.path(model_out_dir, "pred_test.csv"))
 
@@ -859,11 +871,24 @@ powerup_train_models <- function(
         })
 
         pred_user_tbl <- tibble::tibble(
-          cell_line = names(fit_user$new_data$predictions),
-          pred = as.numeric(fit_user$new_data$predictions),
-          pred_error = as.numeric(fit_user$new_data$predictions_error)
+          cell_line = names(fit_user$new_data$pred_mean),
+          pred = as.numeric(fit_user$new_data$pred_mean),                 # legacy-compatible alias
+          pred_error = as.numeric(fit_user$new_data$pred_sd),             # legacy-compatible alias
+          pred_mean = as.numeric(fit_user$new_data$pred_mean),
+          pred_var = as.numeric(fit_user$new_data$pred_var),
+          pred_sd = as.numeric(fit_user$new_data$pred_sd),
+          pred_log_var = as.numeric(fit_user$new_data$pred_log_var),
+          pred_pi_lower_95 = as.numeric(fit_user$new_data$pred_pi_lower_95),
+          pred_pi_upper_95 = as.numeric(fit_user$new_data$pred_pi_upper_95),
+          response_cutoff = as.numeric(fit_user$new_data$response_cutoff),
+          decreasing = as.logical(fit_user$new_data$decreasing),
+          prob_below_cutoff = as.numeric(fit_user$new_data$prob_below_cutoff),
+          prob_above_cutoff = as.numeric(fit_user$new_data$prob_above_cutoff),
+          prob_target_event = as.numeric(fit_user$new_data$prob_target_event),
+          target_event_definition = as.character(fit_user$new_data$target_event_definition)
         )
         readr::write_csv(pred_user_tbl, file.path(model_out_dir, "pred_user.csv"))
+
 
         # 3) SHAP extraction
         stage <- "SHAP_USER: extract fit_user$new_data$shap_values"
