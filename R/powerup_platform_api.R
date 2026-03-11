@@ -79,6 +79,23 @@ powerup_write_json <- function(path, obj) {
   df
 }
 
+.pu_read_selected_samples <- function(path) {
+  if (is.null(path)) return(NULL)
+  if (!is.character(path) || length(path) != 1) return(NULL)
+
+  path <- trimws(path)
+  if (!nzchar(path)) return(NULL)
+  if (!file.exists(path)) return(NULL)
+
+  txt <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  ids <- unlist(strsplit(txt, "[\r\n,;]+", perl = TRUE), use.names = FALSE)
+  ids <- unique(trimws(as.character(ids)))
+  ids <- ids[nzchar(ids)]
+
+  if (length(ids) < 1) return(NULL)
+  ids
+}
+
 .pu_select_top_var_genes <- function(user_matrix, genes, n_features) {
   genes <- intersect(genes, colnames(user_matrix))
   m <- as.matrix(user_matrix[, genes, drop = FALSE])
@@ -364,6 +381,7 @@ powerup_preprocess <- function(
   job_id,
   n_features = 2000L,
   targets = NULL,
+  selected_samples_path = NULL,
   sensitive_cutoff = 0.75,
   resistant_cutoff = 0.25
 ) {
@@ -459,12 +477,58 @@ powerup_preprocess <- function(
     dplyr::filter(.data$cell_line %in% all_ids) %>%
     dplyr::select(.data$cell_line, dplyr::all_of(perturbations))
 
-  # ---- Feature selection: top variable genes on user matrix (deterministic ties) ----
+  # ---- Optional sample subset used ONLY for user-side feature selection ----
+  selected_sample_ids_raw <- .pu_read_selected_samples(selected_samples_path)
+  selected_sample_ids_used <- character(0)
+
+  user_matrix_feature_source <- user_matrix
+
+  if (!is.null(selected_sample_ids_raw) && length(selected_sample_ids_raw) > 0) {
+    selected_sample_ids_used <- intersect(selected_sample_ids_raw, user_matrix$cell_line)
+    selected_sample_ids_missing <- setdiff(selected_sample_ids_raw, user_matrix$cell_line)
+
+    message(glue(
+      "[powerup][jobId={job_id}] selected samples for feature selection provided requested={length(selected_sample_ids_raw)} ",
+      "matched={length(selected_sample_ids_used)} missing={length(selected_sample_ids_missing)}"
+    ))
+
+    if (length(selected_sample_ids_missing) > 0) {
+      message(glue(
+        "[powerup][jobId={job_id}] selected samples missing from matrix: ",
+        "{paste(head(selected_sample_ids_missing, 25), collapse=', ')}",
+        ifelse(length(selected_sample_ids_missing) > 25, " ...", "")
+      ))
+    }
+
+    if (length(selected_sample_ids_used) < 2) {
+      stop(glue(
+        "[powerup][jobId={job_id}] selected_samples_path matched fewer than 2 samples in matrix.csv; ",
+        "matched={length(selected_sample_ids_used)}"
+      ))
+    }
+
+    user_matrix_feature_source <- user_matrix %>%
+      dplyr::filter(.data$cell_line %in% selected_sample_ids_used)
+  } else {
+    message(glue("[powerup][jobId={job_id}] no selected samples file provided; using all user samples for feature selection"))
+  }
+
+  # ---- Feature selection: top variable genes on selected subset of user matrix ----
   n_features_int <- max(1L, as.integer(n_features))
-  selected_genes <- .pu_select_top_var_genes(user_matrix, common_genes, n_features_int)
-  if (length(selected_genes) < 10) stop(glue("[powerup][jobId={job_id}] Feature selection produced too few genes: n={length(selected_genes)}"))
+  selected_genes <- .pu_select_top_var_genes(user_matrix_feature_source, common_genes, n_features_int)
+
+  if (length(selected_genes) < 10) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Feature selection produced too few genes: n={length(selected_genes)} ",
+      "using user_samples_for_feature_selection={nrow(user_matrix_feature_source)}"
+    ))
+  }
 
   # Build feature tables
+  # IMPORTANT:
+  # - features_all always comes from the platform training universe
+  # - features_user always keeps ALL uploaded user samples
+  #   so predictions / SHAP still run on all samples
   features_all <- gene_expression_u %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
   features_user <- user_matrix %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
 
@@ -523,6 +587,12 @@ powerup_preprocess <- function(
       nTrain = length(train_ids),
       nTest = length(test_ids),
       nUser = nrow(features_user)
+    ),
+    selectedSamplesForFeatureSelection = list(
+      provided = !is.null(selected_sample_ids_raw) && length(selected_sample_ids_raw) > 0,
+      path = if (!is.null(selected_samples_path) && nzchar(selected_samples_path)) basename(selected_samples_path) else NULL,
+      requested = if (!is.null(selected_sample_ids_raw)) length(selected_sample_ids_raw) else 0L,
+      used = length(selected_sample_ids_used)
     ),
     artifacts = list(
       perturbationsCsv = "perturbations.csv",
