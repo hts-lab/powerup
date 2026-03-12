@@ -110,6 +110,114 @@ powerup_write_json <- function(path, obj) {
   keep
 }
 
+
+.pu_read_selected_perturbations <- function(path) {
+  if (is.null(path)) return(NULL)
+  if (!is.character(path) || length(path) != 1) return(NULL)
+
+  path <- trimws(path)
+  if (!nzchar(path)) return(NULL)
+  if (!file.exists(path)) return(NULL)
+
+  txt <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  ids <- unlist(strsplit(txt, "[\r\n,;]+", perl = TRUE), use.names = FALSE)
+  ids <- trimws(as.character(ids))
+  ids <- ids[nzchar(ids)]
+
+  if (length(ids) < 1) return(NULL)
+  ids
+}
+
+.pu_canonicalize_perturbation_id <- function(x, strip_ko_prefix = FALSE) {
+  x <- trimws(as.character(x))
+  x <- tolower(x)
+  if (strip_ko_prefix) {
+    x <- sub("^ko_", "", x, ignore.case = TRUE)
+  }
+  x
+}
+
+.pu_resolve_targets_against_perturbations <- function(
+  targets,
+  perturbations,
+  strip_ko_prefix = FALSE,
+  job_id = NA_character_
+) {
+  if (is.null(targets) || length(targets) < 1) {
+    stop(glue("[powerup][jobId={job_id}] targets resolved to empty list"))
+  }
+
+  targets <- trimws(as.character(targets))
+  targets <- targets[nzchar(targets)]
+  if (length(targets) < 1) {
+    stop(glue("[powerup][jobId={job_id}] targets resolved to empty list after trimming"))
+  }
+
+  perturbations <- as.character(perturbations)
+
+  available_tbl <- tibble::tibble(
+    perturbation = perturbations,
+    canonical = vapply(
+      perturbations,
+      .pu_canonicalize_perturbation_id,
+      character(1),
+      strip_ko_prefix = strip_ko_prefix
+    )
+  )
+
+  dup_available <- available_tbl %>%
+    dplyr::count(.data$canonical, name = "n") %>%
+    dplyr::filter(.data$n > 1, nzchar(.data$canonical))
+
+  if (nrow(dup_available) > 0) {
+    stop(glue(
+      "[powerup][jobId={job_id}] perturbation canonicalization is ambiguous for dataset columns, e.g. ",
+      "{paste(head(dup_available$canonical, 10), collapse=', ')}"
+    ))
+  }
+
+  wanted_tbl <- tibble::tibble(
+    requested = targets,
+    requestedOrder = seq_along(targets),
+    canonical = vapply(
+      targets,
+      .pu_canonicalize_perturbation_id,
+      character(1),
+      strip_ko_prefix = strip_ko_prefix
+    )
+  ) %>%
+    dplyr::group_by(.data$canonical) %>%
+    dplyr::slice_head(n = 1) %>%
+    dplyr::ungroup()
+
+  resolved_tbl <- wanted_tbl %>%
+    dplyr::left_join(available_tbl, by = "canonical") %>%
+    dplyr::arrange(.data$requestedOrder)
+
+  unknown <- resolved_tbl %>%
+    dplyr::filter(is.na(.data$perturbation)) %>%
+    dplyr::pull(.data$requested)
+
+  if (length(unknown) > 0) {
+    stop(glue(
+      "[powerup][jobId={job_id}] targets contains unknown perturbations after exact canonical matching: ",
+      "{paste(head(unknown, 25), collapse=', ')}",
+      ifelse(length(unknown) > 25, " ...", "")
+    ))
+  }
+
+  resolved <- resolved_tbl %>%
+    dplyr::pull(.data$perturbation)
+
+  resolved <- unique(resolved)
+  if (length(resolved) < 1) {
+    stop(glue("[powerup][jobId={job_id}] targets resolved to zero matched perturbations"))
+  }
+
+  resolved
+}
+
+
 .pu_hash_to_index <- function(seed_int, perturbation, klass, n) {
   key <- paste(seed_int, perturbation, klass, sep = "|")
   h <- digest::digest(key, algo = "xxhash32", serialize = FALSE)
@@ -452,18 +560,22 @@ powerup_preprocess <- function(
       if (!is.character(targets) || length(targets) < 1) {
         stop(glue("[powerup][jobId={job_id}] targets must be NULL, a single number, or a character vector of perturbation names"))
       }
-      targets <- unique(trimws(targets))
-      targets <- targets[nzchar(targets)]
-      if (length(targets) < 1) stop(glue("[powerup][jobId={job_id}] targets resolved to empty list after trimming"))
 
-      unknown <- setdiff(targets, perturbations)
-      if (length(unknown) > 0) {
-        stop(glue("[powerup][jobId={job_id}] targets contains unknown perturbations: {paste(head(unknown,25), collapse=', ')}"))
-      }
+      targets_resolved <- .pu_resolve_targets_against_perturbations(
+        targets = targets,
+        perturbations = perturbations,
+        strip_ko_prefix = identical(tolower(response_set), "crispr"),
+        job_id = job_id
+      )
 
-      # Keep deterministic ordering: sort
-      perturbations <- sort(targets)
-      message(glue("[powerup][jobId={job_id}] targets explicit allowlist: perturbations_used={length(perturbations)}"))
+      # Keep deterministic ordering for downstream model keys / shards
+      perturbations <- sort(targets_resolved)
+
+      message(glue(
+        "[powerup][jobId={job_id}] targets explicit allowlist resolved successfully: ",
+        "requested={length(unique(trimws(as.character(targets))))} ",
+        "matched={length(perturbations)} stripKoPrefix={identical(tolower(response_set), 'crispr')}"
+      ))
     }
   }
 
