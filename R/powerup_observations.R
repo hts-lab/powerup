@@ -406,7 +406,90 @@ suppressPackageStartupMessages({
   bind_rows(out)
 }
 
+.pu_obs_build_observation_long_tbl <- function(target_tbl) {
+  out <- list()
+
+  # avg_lfc rows
+  avg_tbl <- target_tbl %>%
+    filter(!is.na(.data$mean_target_lfc)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "avg_lfc",
+      observationValue = as.numeric(.data$mean_target_lfc),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message
+    )
+  out[[length(out) + 1L]] <- avg_tbl
+
+  # z_scored_avg_lfc rows
+  z_tbl <- target_tbl %>%
+    filter(!is.na(.data$target_z)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "z_scored_avg_lfc",
+      observationValue = as.numeric(.data$target_z),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message
+    )
+  out[[length(out) + 1L]] <- z_tbl
+
+  # positive_probability rows
+  prob_tbl <- target_tbl %>%
+    filter(!is.na(.data$positive_probability)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "positive_probability",
+      observationValue = as.numeric(.data$positive_probability),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message
+    )
+  out[[length(out) + 1L]] <- prob_tbl
+
+  dplyr::bind_rows(out)
+}
+
 .pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set) {
+  obs_long_tbl <- .pu_obs_build_observation_long_tbl(target_tbl)
+
   pred_tbl %>%
     mutate(
       sample = as.character(.data$cell_line),
@@ -415,8 +498,8 @@ suppressPackageStartupMessages({
         response_set = response_set
       )
     ) %>%
-    left_join(
-      target_tbl,
+    inner_join(
+      obs_long_tbl,
       by = c("sample", "normalizedPerturbation"),
       suffix = c("_pred", "_obs")
     ) %>%
@@ -452,8 +535,8 @@ suppressPackageStartupMessages({
   matched_rows_only <- joined_tbl %>%
     filter(
       !is.na(.data$sample),
-      !is.na(.data$primaryObservationType),
-      !is.na(.data$primaryObservationValue),
+      !is.na(.data$observationType),
+      !is.na(.data$observationValue),
       !is.na(.data$prediction_value)
     )
 
@@ -463,9 +546,9 @@ suppressPackageStartupMessages({
     transmute(sampleId = .data$sample)
 
   observation_types <- matched_rows_only %>%
-    distinct(.data$primaryObservationType) %>%
-    arrange(.data$primaryObservationType) %>%
-    transmute(observationType = as.character(.data$primaryObservationType))
+    distinct(.data$observationType) %>%
+    arrange(.data$observationType) %>%
+    transmute(observationType = as.character(.data$observationType))
 
   write_json_file <- function(path, obj) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -491,13 +574,13 @@ suppressPackageStartupMessages({
 
   preview_candidates <- joined_tbl %>%
     filter(
-      !is.na(.data$primaryObservationType),
-      !is.na(.data$primaryObservationValue),
+      !is.na(.data$observationType),
+      !is.na(.data$observationValue),
       !is.na(.data$prediction_value)
     ) %>%
     arrange(
       .data$sample,
-      .data$primaryObservationType,
+      .data$observationType,
       .data$perturbation_display
     )
 
@@ -507,17 +590,17 @@ suppressPackageStartupMessages({
     schemaVersion = 2,
     generatedAt = as.character(Sys.time()),
     previewSampleId = if (preview_n > 0) as.character(preview_candidates$sample[[1]]) else NULL,
-    previewObservationType = if (preview_n > 0) as.character(preview_candidates$primaryObservationType[[1]]) else NULL,
+    previewObservationType = if (preview_n > 0) as.character(preview_candidates$observationType[[1]]) else NULL,
     pointCount = preview_n,
     points = lapply(seq_len(preview_n), function(i) {
       row <- preview_candidates[i, , drop = FALSE]
       list(
         sampleId = as.character(row$sample[[1]]),
-        observationType = as.character(row$primaryObservationType[[1]]),
+        observationType = as.character(row$observationType[[1]]),
         perturbation = as.character(row$perturbation_display[[1]]),
         modelKey = as.character(row$modelKey[[1]]),
         x = as.numeric(row$prediction_value[[1]]),
-        y = as.numeric(row$primaryObservationValue[[1]]),
+        y = as.numeric(row$observationValue[[1]]),
         positiveProbability = as.numeric(row$positive_probability[[1]]),
         scaledTargetLfc = as.numeric(row$scaled_target_lfc[[1]])
       )
@@ -621,8 +704,8 @@ powerup_process_observations <- function(
 
   matched_rows_only <- joined_tbl %>%
     filter(
-      !is.na(.data$primaryObservationType),
-      !is.na(.data$primaryObservationValue),
+      !is.na(.data$observationType),
+      !is.na(.data$observationValue),
       !is.na(.data$prediction_value)
     )
 
