@@ -199,19 +199,23 @@ powerup_write_json <- function(path, obj) {
     dplyr::pull(.data$requested)
 
   if (length(unknown) > 0) {
-    stop(glue(
-      "[powerup][jobId={job_id}] targets contains unknown perturbations after exact canonical matching: ",
+    message(glue(
+      "[powerup][jobId={job_id}] ignoring unknown requested perturbations after exact canonical matching: ",
       "{paste(head(unknown, 25), collapse=', ')}",
       ifelse(length(unknown) > 25, " ...", "")
     ))
   }
 
   resolved <- resolved_tbl %>%
+    dplyr::filter(!is.na(.data$perturbation)) %>%
     dplyr::pull(.data$perturbation)
 
   resolved <- unique(resolved)
+
   if (length(resolved) < 1) {
-    stop(glue("[powerup][jobId={job_id}] targets resolved to zero matched perturbations"))
+    stop(glue(
+      "[powerup][jobId={job_id}] no requested perturbations matched dataset columns after exact canonical matching"
+    ))
   }
 
   resolved
@@ -523,7 +527,7 @@ powerup_preprocess <- function(
   user_genes <- setdiff(colnames(user_matrix), "cell_line")
   expr_genes <- setdiff(colnames(gene_expression), "cell_line")
   common_genes <- intersect(user_genes, expr_genes)
-  if (length(common_genes) < 10) {
+  if (length(common_genes) < 2) {
     stop(glue("[powerup][jobId={job_id}] Too few overlapping genes between user matrix and gene_expression: overlap={length(common_genes)}"))
   }
 
@@ -571,18 +575,25 @@ powerup_preprocess <- function(
       # Keep deterministic ordering for downstream model keys / shards
       perturbations <- sort(targets_resolved)
 
+      requested_targets_clean <- unique(trimws(as.character(targets)))
+      requested_targets_clean <- requested_targets_clean[nzchar(requested_targets_clean)]
+      n_requested <- length(requested_targets_clean)
+      n_matched <- length(targets_resolved)
+      n_ignored <- n_requested - n_matched
+
       message(glue(
-        "[powerup][jobId={job_id}] targets explicit allowlist resolved successfully: ",
-        "requested={length(unique(trimws(as.character(targets))))} ",
-        "matched={length(perturbations)} stripKoPrefix={identical(tolower(response_set), 'crispr')}"
+        "[powerup][jobId={job_id}] targets explicit allowlist resolved: ",
+        "requested={n_requested} matched={n_matched} ignored={n_ignored} ",
+        "stripKoPrefix={identical(tolower(response_set), 'crispr')}"
       ))
+
     }
   }
 
   # Universe = cell_line overlap between gene_expression and response
   all_ids <- intersect(gene_expression$cell_line, response_df$cell_line)
   all_ids <- sort(unique(all_ids))
-  if (length(all_ids) < 20) stop(glue("[powerup][jobId={job_id}] Too few overlapping cell_line IDs between gene_expression and response: n={length(all_ids)}"))
+  if (length(all_ids) < 3) stop(glue("[powerup][jobId={job_id}] Too few overlapping cell_line IDs between gene_expression and response: n={length(all_ids)}"))
 
   gene_expression_u <- gene_expression %>% dplyr::filter(.data$cell_line %in% all_ids)
   response_u        <- response_df %>%
@@ -613,14 +624,15 @@ powerup_preprocess <- function(
     }
 
     if (length(selected_sample_ids_used) < 2) {
-      stop(glue(
+      message(glue(
         "[powerup][jobId={job_id}] selected_samples_path matched fewer than 2 samples in matrix.csv; ",
-        "matched={length(selected_sample_ids_used)}"
+        "matched={length(selected_sample_ids_used)}. Falling back to all user samples for feature selection."
       ))
+    } else {
+      user_matrix_feature_source <- user_matrix %>%
+        dplyr::filter(.data$cell_line %in% selected_sample_ids_used)
     }
 
-    user_matrix_feature_source <- user_matrix %>%
-      dplyr::filter(.data$cell_line %in% selected_sample_ids_used)
   } else {
     message(glue("[powerup][jobId={job_id}] no selected samples file provided; using all user samples for feature selection"))
   }
