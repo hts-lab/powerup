@@ -144,11 +144,17 @@ suppressPackageStartupMessages({
     mutate(
       sample = as.character(.data$sample),
       perturbation = as.character(.data$perturbation),
-      normalizedPerturbation = dplyr::if_else(
-        is.na(.data$normalizedPerturbation) | !nzchar(trimws(.data$normalizedPerturbation)),
-        .pu_obs_normalize_perturbation(.data$perturbation, response_set = response_set),
-        as.character(.data$normalizedPerturbation)
+
+      # IMPORTANT:
+      # Recompute normalizedPerturbation here from perturbation using the
+      # R-package-owned canonicalization logic. Do NOT trust the precomputed
+      # normalizedPerturbation column from the cleaned CSV, because earlier API
+      # parsing may have used different normalization semantics.
+      normalizedPerturbation = .pu_obs_normalize_perturbation(
+        .data$perturbation,
+        response_set = response_set
       ),
+
       observationType = as.character(.data$observationType),
       observationValue = suppressWarnings(as.numeric(.data$observationValue)),
       lineNumber = suppressWarnings(as.integer(.data$lineNumber)),
@@ -193,9 +199,21 @@ suppressPackageStartupMessages({
     category_meta <- .pu_obs_meta_scalar_chr(meta_first, c("category", "Category"))
     gene_symbol <- .pu_obs_meta_scalar_chr(meta_first, c("geneSymbol", "gene_symbol", "Gene Symbol"))
 
-    # Keep a preferred observation channel for scatter/defaults.
-    primary_observation_type <- if (!is.na(target_z)) "target_z" else if (!is.na(mean_target_lfc)) "mean_target_lfc" else .pu_obs_first_nonempty(g$observationType)
-    primary_observation_value <- if (!is.na(target_z)) target_z else if (!is.na(mean_target_lfc)) mean_target_lfc else {
+    # Keep a preferred observation channel for scatter/defaults using
+    # user-facing/raw-style names so filtering stays aligned.
+    primary_observation_type <- if (!is.na(target_z)) {
+      "z_scored_avg_lfc"
+    } else if (!is.na(mean_target_lfc)) {
+      "avg_lfc"
+    } else {
+      .pu_obs_first_nonempty(g$observationType)
+    }
+
+    primary_observation_value <- if (!is.na(target_z)) {
+      target_z
+    } else if (!is.na(mean_target_lfc)) {
+      mean_target_lfc
+    } else {
       vals <- g$observationValue[is.finite(g$observationValue)]
       if (length(vals) > 0) vals[[1]] else NA_real_
     }
@@ -431,17 +449,23 @@ suppressPackageStartupMessages({
   .pu_write_parquet_required(positive_tbl, positive_path)
   .pu_write_parquet_required(joined_tbl, joined_path)
 
-  samples <- target_tbl %>%
-    filter(!is.na(.data$sample)) %>%
+  matched_rows_only <- joined_tbl %>%
+    filter(
+      !is.na(.data$sample),
+      !is.na(.data$primaryObservationType),
+      !is.na(.data$primaryObservationValue),
+      !is.na(.data$prediction_value)
+    )
+
+  samples <- matched_rows_only %>%
     distinct(.data$sample) %>%
     arrange(.data$sample) %>%
     transmute(sampleId = .data$sample)
 
-  observation_types <- {
-    raw_types <- schema_obj$distinctObservationTypes
-    if (is.null(raw_types)) raw_types <- character(0)
-    tibble::tibble(observationType = sort(unique(as.character(raw_types))))
-  }
+  observation_types <- matched_rows_only %>%
+    distinct(.data$primaryObservationType) %>%
+    arrange(.data$primaryObservationType) %>%
+    transmute(observationType = as.character(.data$primaryObservationType))
 
   write_json_file <- function(path, obj) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -507,6 +531,7 @@ suppressPackageStartupMessages({
   invisible(TRUE)
 }
 
+
 #' Process a submitted observations run.
 #'
 #' @export
@@ -556,6 +581,59 @@ powerup_process_observations <- function(
     response_set = response_set
   )
 
+  pred_norm_tbl <- pred_tbl %>%
+    mutate(
+      normalizedPerturbationObsJoin = .pu_obs_normalize_perturbation(
+        .data$perturbation,
+        response_set = response_set
+      )
+    )
+
+  observed_perts <- sort(unique(as.character(
+    positive_tbl$normalizedPerturbation[!is.na(positive_tbl$normalizedPerturbation)]
+  )))
+  predicted_perts <- sort(unique(as.character(
+    pred_norm_tbl$normalizedPerturbationObsJoin[!is.na(pred_norm_tbl$normalizedPerturbationObsJoin)]
+  )))
+  overlapping_perts <- intersect(observed_perts, predicted_perts)
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "observed_perturbations={length(observed_perts)} ",
+    "predicted_perturbations={length(predicted_perts)} ",
+    "overlapping_perturbations={length(overlapping_perts)}"
+  ))
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "observed_perturbation_examples={paste(head(observed_perts, 20), collapse=', ')}"
+  ))
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "predicted_perturbation_examples={paste(head(predicted_perts, 20), collapse=', ')}"
+  ))
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "overlapping_perturbation_examples={paste(head(overlapping_perts, 20), collapse=', ')}"
+  ))
+
+  matched_rows_only <- joined_tbl %>%
+    filter(
+      !is.na(.data$primaryObservationType),
+      !is.na(.data$primaryObservationValue),
+      !is.na(.data$prediction_value)
+    )
+
+  observed_samples <- sort(unique(as.character(
+    positive_tbl$sample[!is.na(positive_tbl$sample)]
+  )))
+  predicted_samples <- sort(unique(as.character(
+    pred_tbl$cell_line[!is.na(pred_tbl$cell_line)]
+  )))
+  overlapping_samples <- intersect(observed_samples, predicted_samples)
+
   summary <- list(
     schemaVersion = 2,
     jobId = job_id,
@@ -567,9 +645,25 @@ powerup_process_observations <- function(
       nCanonicalRows = nrow(obs_long),
       nTargetLevelRows = nrow(target_tbl),
       nPositiveProbabilityRows = nrow(positive_tbl),
-      nJoinedRows = nrow(joined_tbl),
-      nSamples = dplyr::n_distinct(target_tbl$sample),
+      nPredictionRows = nrow(pred_tbl),
+      nMatchedRows = nrow(matched_rows_only),
+      nObservedSamples = length(observed_samples),
+      nPredictedSamples = length(predicted_samples),
+      nOverlappingSamples = length(overlapping_samples),
+      nObservedPerturbations = length(observed_perts),
+      nPredictedPerturbations = length(predicted_perts),
+      nOverlappingPerturbations = length(overlapping_perts),
       nObservationTypes = length(unique(obs_long$observationType))
+    ),
+    sampleOverlap = list(
+      overlapping = head(overlapping_samples, 50),
+      observedOnly = head(setdiff(observed_samples, predicted_samples), 50),
+      predictedOnly = head(setdiff(predicted_samples, observed_samples), 50)
+    ),
+    perturbationOverlap = list(
+      overlapping = head(overlapping_perts, 50),
+      observedOnly = head(setdiff(observed_perts, predicted_perts), 50),
+      predictedOnly = head(setdiff(predicted_perts, observed_perts), 50)
     ),
     controls = list(
       positiveCount = length(controls$positive),
@@ -616,7 +710,9 @@ powerup_process_observations <- function(
 
   message(glue(
     "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
-    "OBSERVATIONS done target_rows={nrow(target_tbl)} joined_rows={nrow(joined_tbl)}"
+    "OBSERVATIONS done target_rows={nrow(target_tbl)} ",
+    "prediction_rows={nrow(pred_tbl)} ",
+    "matched_rows={nrow(matched_rows_only)}"
   ))
 
   invisible(TRUE)
