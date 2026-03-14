@@ -7,6 +7,8 @@
 powerup_process_observations(
   cleaned_observations_path,
   schema_path,
+  positive_controls_path = NULL,
+  negative_controls_path = NULL,
   predictions_path,
   out_observations_dir,
   job_id,
