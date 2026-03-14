@@ -82,6 +82,18 @@ suppressPackageStartupMessages({
     ))
   }
 
+  # Finalize currently writes pred_mean, but be robust if an older artifact only has pred.
+  if (!("pred_mean" %in% colnames(pred_tbl))) {
+    if ("pred" %in% colnames(pred_tbl)) {
+      pred_tbl <- pred_tbl %>%
+        mutate(pred_mean = suppressWarnings(as.numeric(.data$pred)))
+    } else {
+      stop(
+        "[powerup][OBSERVATIONS] predictions parquet must contain pred_mean or pred"
+      )
+    }
+  }
+
   pred_tbl
 }
 
@@ -350,18 +362,24 @@ suppressPackageStartupMessages({
   pred_tbl %>%
     mutate(
       sample = as.character(.data$cell_line),
-      normalizedPerturbation = .pu_obs_normalize_perturbation(.data$perturbation, response_set = response_set)
+      normalizedPerturbation = .pu_obs_normalize_perturbation(
+        .data$perturbation,
+        response_set = response_set
+      )
     ) %>%
     left_join(
       target_tbl,
       by = c("sample", "normalizedPerturbation"),
       suffix = c("_pred", "_obs")
+    ) %>%
+    mutate(
+      perturbation_display = dplyr::coalesce(
+        .data$perturbation_obs,
+        .data$perturbation_pred,
+        .data$normalizedPerturbation
+      ),
+      prediction_value = suppressWarnings(as.numeric(.data$pred_mean))
     )
-}
-
-.pu_obs_write_json <- function(path, obj) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  writeLines(jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE, null = "null"), con = path)
 }
 
 .pu_obs_write_outputs <- function(
@@ -383,7 +401,7 @@ suppressPackageStartupMessages({
   .pu_write_parquet_required(positive_tbl, positive_path)
   .pu_write_parquet_required(joined_tbl, joined_path)
 
-  samples <- joined_tbl %>%
+  samples <- target_tbl %>%
     filter(!is.na(.data$sample)) %>%
     distinct(.data$sample) %>%
     arrange(.data$sample) %>%
@@ -408,13 +426,19 @@ suppressPackageStartupMessages({
       list(observationType = as.character(observation_types$observationType[[i]]))
     })
   )
+
+  
   preview_candidates <- joined_tbl %>%
     filter(
       !is.na(.data$primaryObservationType),
       !is.na(.data$primaryObservationValue),
-      !is.na(.data$pred_mean)
+      !is.na(.data$prediction_value)
     ) %>%
-    arrange(.data$sample, .data$primaryObservationType, .data$perturbation)
+    arrange(
+      .data$sample,
+      .data$primaryObservationType,
+      .data$perturbation_display
+    )
 
   scatter_preview <- list(
     schemaVersion = 2,
@@ -427,9 +451,9 @@ suppressPackageStartupMessages({
       list(
         sampleId = as.character(row$sample[[1]]),
         observationType = as.character(row$primaryObservationType[[1]]),
-        perturbation = as.character(row$perturbation[[1]]),
+        perturbation = as.character(row$perturbation_display[[1]]),
         modelKey = as.character(row$modelKey[[1]]),
-        x = as.numeric(row$pred_mean[[1]]),
+        x = as.numeric(row$prediction_value[[1]]),
         y = as.numeric(row$primaryObservationValue[[1]]),
         positiveProbability = as.numeric(row$positive_probability[[1]]),
         scaledTargetLfc = as.numeric(row$scaled_target_lfc[[1]])
