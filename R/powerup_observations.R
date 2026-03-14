@@ -26,6 +26,28 @@ suppressPackageStartupMessages({
   x[[1]]
 }
 
+.pu_obs_make_clean_name <- function(x) {
+  if (length(x) == 0) return(character(0))
+
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+
+  x <- trimws(x)
+  x <- tolower(x)
+
+  # Replace any run of non-alphanumeric characters with underscore
+  x <- gsub("[^a-z0-9]+", "_", x, perl = TRUE)
+
+  # Collapse repeated underscores
+  x <- gsub("_+", "_", x, perl = TRUE)
+
+  # Trim leading/trailing underscores
+  x <- gsub("^_+", "", x, perl = TRUE)
+  x <- gsub("_+$", "", x, perl = TRUE)
+
+  x
+}
+
 .pu_obs_parse_meta_row <- function(x) {
   if (is.null(x) || is.na(x) || !nzchar(trimws(x))) return(list())
   tryCatch(
@@ -59,9 +81,20 @@ suppressPackageStartupMessages({
 }
 
 .pu_obs_normalize_perturbation <- function(x, response_set) {
-  strip_ko_prefix <- identical(tolower(response_set), "crispr")
-  .pu_canonicalize_perturbation_id(x, strip_ko_prefix = strip_ko_prefix)
+  if (length(x) == 0) return(character(0))
+
+  cleaned <- .pu_obs_make_clean_name(x)
+
+  if (identical(tolower(response_set), "crispr")) {
+    # Convert gene symbols → model perturbation ids
+    # Example: CTNNB1 -> ctnnb1 -> ko_ctnnb1
+    cleaned <- sub("^ko_", "", cleaned, perl = TRUE)
+    return(ifelse(nzchar(cleaned), paste0("ko_", cleaned), cleaned))
+  }
+
+  cleaned
 }
+
 
 .pu_obs_load_predictions_required <- function(predictions_path) {
   if (!requireNamespace("arrow", quietly = TRUE)) {
