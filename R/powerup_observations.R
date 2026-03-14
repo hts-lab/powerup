@@ -395,9 +395,19 @@ suppressPackageStartupMessages({
     tibble::tibble(observationType = sort(unique(as.character(raw_types))))
   }
 
-  readr::write_json(samples, file.path(out_observations_dir, "samples.json"), pretty = TRUE, auto_unbox = TRUE)
-  readr::write_json(observation_types, file.path(out_observations_dir, "observation_types.json"), pretty = TRUE, auto_unbox = TRUE)
+  .pu_obs_write_json(
+    file.path(out_observations_dir, "samples.json"),
+    lapply(seq_len(nrow(samples)), function(i) {
+      list(sampleId = as.character(samples$sampleId[[i]]))
+    })
+  )
 
+  .pu_obs_write_json(
+    file.path(out_observations_dir, "observation_types.json"),
+    lapply(seq_len(nrow(observation_types)), function(i) {
+      list(observationType = as.character(observation_types$observationType[[i]]))
+    })
+  )
   preview_candidates <- joined_tbl %>%
     filter(
       !is.na(.data$primaryObservationType),
