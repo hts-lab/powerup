@@ -16,9 +16,6 @@ suppressPackageStartupMessages({
   jsonlite::fromJSON(txt, simplifyVector = FALSE)
 }
 
-.pu_obs_safe_num <- function(x) {
-  suppressWarnings(as.numeric(x))
-}
 
 .pu_obs_first_nonempty <- function(x) {
   x <- as.character(x)
@@ -378,7 +375,7 @@ suppressPackageStartupMessages({
         .data$perturbation_pred,
         .data$normalizedPerturbation
       ),
-      prediction_value = suppressWarnings(as.numeric(.data$pred_mean))
+      prediction_value = as.numeric(.data$pred_mean)
     )
 }
 
@@ -413,21 +410,28 @@ suppressPackageStartupMessages({
     tibble::tibble(observationType = sort(unique(as.character(raw_types))))
   }
 
-  .pu_obs_write_json(
+  write_json_file <- function(path, obj) {
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines(
+      jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE, null = "null"),
+      con = path
+    )
+  }
+
+  write_json_file(
     file.path(out_observations_dir, "samples.json"),
     lapply(seq_len(nrow(samples)), function(i) {
       list(sampleId = as.character(samples$sampleId[[i]]))
     })
   )
 
-  .pu_obs_write_json(
+  write_json_file(
     file.path(out_observations_dir, "observation_types.json"),
     lapply(seq_len(nrow(observation_types)), function(i) {
       list(observationType = as.character(observation_types$observationType[[i]]))
     })
   )
 
-  
   preview_candidates <- joined_tbl %>%
     filter(
       !is.na(.data$primaryObservationType),
@@ -440,13 +444,15 @@ suppressPackageStartupMessages({
       .data$perturbation_display
     )
 
+  preview_n <- min(1000L, nrow(preview_candidates))
+
   scatter_preview <- list(
     schemaVersion = 2,
     generatedAt = as.character(Sys.time()),
-    previewSampleId = if (nrow(preview_candidates) > 0) as.character(preview_candidates$sample[[1]]) else NULL,
-    previewObservationType = if (nrow(preview_candidates) > 0) as.character(preview_candidates$primaryObservationType[[1]]) else NULL,
-    pointCount = min(1000L, nrow(preview_candidates)),
-    points = lapply(seq_len(min(1000L, nrow(preview_candidates))), function(i) {
+    previewSampleId = if (preview_n > 0) as.character(preview_candidates$sample[[1]]) else NULL,
+    previewObservationType = if (preview_n > 0) as.character(preview_candidates$primaryObservationType[[1]]) else NULL,
+    pointCount = preview_n,
+    points = lapply(seq_len(preview_n), function(i) {
       row <- preview_candidates[i, , drop = FALSE]
       list(
         sampleId = as.character(row$sample[[1]]),
@@ -461,9 +467,9 @@ suppressPackageStartupMessages({
     })
   )
 
-  .pu_obs_write_json(file.path(out_observations_dir, "manifest.json"), manifest)
-  .pu_obs_write_json(file.path(out_observations_dir, "summary.json"), summary)
-  .pu_obs_write_json(file.path(out_observations_dir, "scatter_preview.json"), scatter_preview)
+  write_json_file(file.path(out_observations_dir, "manifest.json"), manifest)
+  write_json_file(file.path(out_observations_dir, "summary.json"), summary)
+  write_json_file(file.path(out_observations_dir, "scatter_preview.json"), scatter_preview)
 
   invisible(TRUE)
 }
