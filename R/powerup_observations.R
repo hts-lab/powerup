@@ -16,6 +16,19 @@ suppressPackageStartupMessages({
   jsonlite::fromJSON(txt, simplifyVector = FALSE)
 }
 
+.pu_obs_read_control_file <- function(path) {
+  if (is.null(path) || is.na(path) || !nzchar(trimws(path))) return(character(0))
+  if (!file.exists(path)) return(character(0))
+
+  txt <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  if (!nzchar(trimws(txt))) return(character(0))
+
+  vals <- unlist(strsplit(txt, "[\r\n,;]+", perl = TRUE), use.names = FALSE)
+  vals <- trimws(as.character(vals))
+  vals <- vals[nzchar(vals)]
+  unique(vals)
+}
+
 
 .pu_obs_first_nonempty <- function(x) {
   x <- as.character(x)
@@ -282,18 +295,26 @@ suppressPackageStartupMessages({
   )
 }
 
-.pu_obs_resolve_controls <- function(target_tbl, response_set) {
+.pu_obs_resolve_controls <- function(
+  target_tbl,
+  response_set,
+  positive_controls_path = NULL,
+  negative_controls_path = NULL
+) {
+  file_pos_raw <- .pu_obs_read_control_file(positive_controls_path)
+  file_neg_raw <- .pu_obs_read_control_file(negative_controls_path)
+
   pkg <- .pu_obs_load_packaged_controls()
   meta <- .pu_obs_load_metadata_controls(target_tbl)
 
-  pos <- unique(c(
-    .pu_obs_normalize_perturbation(pkg$positive, response_set),
-    meta$positive
-  ))
-  neg <- unique(c(
-    .pu_obs_normalize_perturbation(pkg$negative, response_set),
-    meta$negative
-  ))
+  file_pos <- .pu_obs_normalize_perturbation(file_pos_raw, response_set)
+  file_neg <- .pu_obs_normalize_perturbation(file_neg_raw, response_set)
+
+  pkg_pos <- .pu_obs_normalize_perturbation(pkg$positive, response_set)
+  pkg_neg <- .pu_obs_normalize_perturbation(pkg$negative, response_set)
+
+  pos <- unique(c(file_pos, pkg_pos, meta$positive))
+  neg <- unique(c(file_neg, pkg_neg, meta$negative))
 
   pos <- sort(unique(pos[!is.na(pos) & nzchar(pos)]))
   neg <- sort(unique(neg[!is.na(neg) & nzchar(neg)]))
@@ -301,9 +322,21 @@ suppressPackageStartupMessages({
   list(
     positive = pos,
     negative = neg,
-    source = unique(c(pkg$source, meta$source))
+    source = unique(c(
+      if (length(file_pos_raw) > 0) "positive_controls_file" else NULL,
+      if (length(file_neg_raw) > 0) "negative_controls_file" else NULL,
+      pkg$source,
+      meta$source
+    )),
+    uploaded = list(
+      positiveRaw = sort(unique(file_pos_raw)),
+      negativeRaw = sort(unique(file_neg_raw)),
+      positiveNormalized = pos[pos %in% file_pos],
+      negativeNormalized = neg[neg %in% file_neg]
+    )
   )
 }
+
 
 .pu_obs_add_control_annotations <- function(target_tbl, controls) {
   target_tbl %>%
@@ -621,6 +654,8 @@ suppressPackageStartupMessages({
 powerup_process_observations <- function(
   cleaned_observations_path,
   schema_path,
+  positive_controls_path = NULL,
+  negative_controls_path = NULL,
   predictions_path,
   out_observations_dir,
   job_id,
@@ -634,6 +669,13 @@ powerup_process_observations <- function(
   .pu_assert_file_exists(cleaned_observations_path, "cleaned_observations_path")
   .pu_assert_file_exists(schema_path, "schema_path")
   .pu_assert_file_exists(predictions_path, "predictions_path")
+
+  if (!is.null(positive_controls_path) && !is.na(positive_controls_path) && nzchar(trimws(positive_controls_path))) {
+    .pu_assert_file_exists(positive_controls_path, "positive_controls_path")
+  }
+  if (!is.null(negative_controls_path) && !is.na(negative_controls_path) && nzchar(trimws(negative_controls_path))) {
+    .pu_assert_file_exists(negative_controls_path, "negative_controls_path")
+  }
 
   message(glue(
     "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
@@ -650,7 +692,28 @@ powerup_process_observations <- function(
   pred_tbl <- .pu_obs_load_predictions_required(predictions_path)
 
   target_tbl <- .pu_obs_extract_target_level(obs_long, response_set = response_set)
-  controls <- .pu_obs_resolve_controls(target_tbl, response_set = response_set)
+  controls <- .pu_obs_resolve_controls(
+    target_tbl = target_tbl,
+    response_set = response_set,
+    positive_controls_path = positive_controls_path,
+    negative_controls_path = negative_controls_path
+  )
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "controls positive={length(controls$positive)} negative={length(controls$negative)} ",
+    "sources={paste(controls$source, collapse='|')}"
+  ))
+
+  if (!is.null(controls$uploaded)) {
+    message(glue(
+      "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+      "uploaded_control_counts raw_positive={length(controls$uploaded$positiveRaw)} ",
+      "raw_negative={length(controls$uploaded$negativeRaw)} ",
+      "normalized_positive={length(controls$uploaded$positiveNormalized)} ",
+      "normalized_negative={length(controls$uploaded$negativeNormalized)}"
+    ))
+  }
 
   target_tbl <- target_tbl %>%
     .pu_obs_add_control_annotations(controls = controls) %>%
@@ -751,7 +814,11 @@ powerup_process_observations <- function(
     controls = list(
       positiveCount = length(controls$positive),
       negativeCount = length(controls$negative),
-      source = controls$source
+      source = controls$source,
+      uploadedPositiveRawCount = if (!is.null(controls$uploaded)) length(controls$uploaded$positiveRaw) else 0L,
+      uploadedNegativeRawCount = if (!is.null(controls$uploaded)) length(controls$uploaded$negativeRaw) else 0L,
+      uploadedPositiveNormalizedCount = if (!is.null(controls$uploaded)) length(controls$uploaded$positiveNormalized) else 0L,
+      uploadedNegativeNormalizedCount = if (!is.null(controls$uploaded)) length(controls$uploaded$negativeNormalized) else 0L
     )
   )
 
@@ -767,6 +834,8 @@ powerup_process_observations <- function(
     inputs = list(
       cleanedObservationsPath = basename(cleaned_observations_path),
       schemaPath = basename(schema_path),
+      positiveControlsPath = if (!is.null(positive_controls_path) && nzchar(trimws(positive_controls_path))) basename(positive_controls_path) else NULL,
+      negativeControlsPath = if (!is.null(negative_controls_path) && nzchar(trimws(negative_controls_path))) basename(negative_controls_path) else NULL,
       predictionsPath = basename(predictions_path)
     ),
     artifacts = list(
