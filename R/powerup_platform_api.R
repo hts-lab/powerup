@@ -491,7 +491,7 @@ powerup_preprocess <- function(
   response_set,
   seed,
   job_id,
-  n_features = 2000L,
+  n_features = 6000L,
   targets = NULL,
   selected_samples_path = NULL,
   sensitive_cutoff = 0.75,

@@ -125,6 +125,24 @@ suppressPackageStartupMessages({
     ))
   }
 
+  # For cutoff-adjustable posterior work, observations should depend on the
+  # cutoff-free Gaussian prior ingredients, not on a precomputed single-cutoff
+  # prob_target_event. We therefore require pred_mean and at least one variance
+  # representation that can be used later by the frontend/API.
+  if (!("pred_mean" %in% colnames(pred_tbl)) && !("pred" %in% colnames(pred_tbl))) {
+    stop(
+      "[powerup][OBSERVATIONS] predictions parquet must contain pred_mean or pred"
+    )
+  }
+
+  has_sd_like <- any(c("pred_sd", "pred_var", "pred_log_var") %in% colnames(pred_tbl))
+  if (!has_sd_like) {
+    stop(
+      "[powerup][OBSERVATIONS] predictions parquet must contain at least one of pred_sd, pred_var, or pred_log_var"
+    )
+  }
+
+
   # Finalize currently writes pred_mean, but be robust if an older artifact only has pred.
   if (!("pred_mean" %in% colnames(pred_tbl))) {
     if ("pred" %in% colnames(pred_tbl)) {
@@ -137,7 +155,66 @@ suppressPackageStartupMessages({
     }
   }
 
+  if (!("pred_sd" %in% colnames(pred_tbl))) {
+    if ("pred_var" %in% colnames(pred_tbl)) {
+      pred_tbl <- pred_tbl %>%
+        mutate(pred_sd = sqrt(pmax(suppressWarnings(as.numeric(.data$pred_var)), 0)))
+    } else if ("pred_log_var" %in% colnames(pred_tbl)) {
+      pred_tbl <- pred_tbl %>%
+        mutate(pred_sd = sqrt(exp(suppressWarnings(as.numeric(.data$pred_log_var)))))
+    } else {
+      pred_tbl <- pred_tbl %>%
+        mutate(pred_sd = NA_real_)
+    }
+  }
+
+  if (!("pred_var" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>%
+      mutate(pred_var = ifelse(is.finite(.data$pred_sd), .data$pred_sd^2, NA_real_))
+  }
+
+  if (!("pred_log_var" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>%
+      mutate(
+        pred_log_var = ifelse(
+          is.finite(.data$pred_var) & .data$pred_var > 0,
+          log(.data$pred_var),
+          NA_real_
+        )
+      )
+  }
+
+  if (!("pred_pi_lower_95" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>% mutate(pred_pi_lower_95 = NA_real_)
+  }
+
+  if (!("pred_pi_upper_95" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>% mutate(pred_pi_upper_95 = NA_real_)
+  }
+
+  if (!("decreasing" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>% mutate(decreasing = NA)
+  }
+
+  if (!("response_cutoff" %in% colnames(pred_tbl))) {
+    pred_tbl <- pred_tbl %>% mutate(response_cutoff = NA_real_)
+  }
+
+  # Final type normalization for downstream joins / JSON export
+  pred_tbl <- pred_tbl %>%
+    mutate(
+      pred_mean = suppressWarnings(as.numeric(.data$pred_mean)),
+      pred_sd = suppressWarnings(as.numeric(.data$pred_sd)),
+      pred_var = suppressWarnings(as.numeric(.data$pred_var)),
+      pred_log_var = suppressWarnings(as.numeric(.data$pred_log_var)),
+      pred_pi_lower_95 = suppressWarnings(as.numeric(.data$pred_pi_lower_95)),
+      pred_pi_upper_95 = suppressWarnings(as.numeric(.data$pred_pi_upper_95)),
+      response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff)),
+      decreasing = as.logical(.data$decreasing)
+    )
+
   pred_tbl
+
 }
 
 .pu_obs_extract_target_level <- function(obs_long, response_set) {
@@ -439,6 +516,140 @@ suppressPackageStartupMessages({
   bind_rows(out)
 }
 
+
+.pu_obs_density_eval_safe <- function(x, obs_values, bw = "nrd0", adjust = 1) {
+  x <- suppressWarnings(as.numeric(x))
+  obs_values <- suppressWarnings(as.numeric(obs_values))
+  obs_values <- obs_values[is.finite(obs_values)]
+
+  out <- rep(NA_real_, length(x))
+
+  if (length(obs_values) < 2) {
+    return(out)
+  }
+
+  # density() can fail if all values are identical or nearly identical.
+  # In that case fall back to a narrow Gaussian around the common value.
+  if (stats::sd(obs_values, na.rm = TRUE) <= 1e-12) {
+    mu <- stats::median(obs_values, na.rm = TRUE)
+    sd_fallback <- 0.05
+    out[is.finite(x)] <- stats::dnorm(x[is.finite(x)], mean = mu, sd = sd_fallback)
+    return(out)
+  }
+
+  dens <- tryCatch(
+    stats::density(
+      obs_values,
+      bw = bw,
+      adjust = adjust,
+      kernel = "gaussian",
+      n = 2048,
+      from = min(obs_values, na.rm = TRUE) - 4 * stats::sd(obs_values, na.rm = TRUE),
+      to   = max(obs_values, na.rm = TRUE) + 4 * stats::sd(obs_values, na.rm = TRUE)
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(dens)) {
+    return(out)
+  }
+
+  finite_idx <- is.finite(x)
+  if (!any(finite_idx)) {
+    return(out)
+  }
+
+  # Linear interpolation, with rule=2 so tails take boundary density
+  out[finite_idx] <- approx(
+    x = dens$x,
+    y = dens$y,
+    xout = x[finite_idx],
+    rule = 2,
+    ties = "ordered"
+  )$y
+
+  out
+}
+
+.pu_obs_fit_kde_likelihood_by_sample <- function(
+  target_tbl,
+  obs_col = "target_z",
+  bw = "nrd0",
+  adjust = 1,
+  density_floor = 1e-12
+) {
+  split_tbl <- split(target_tbl, target_tbl$sample, drop = TRUE)
+
+  out <- lapply(split_tbl, function(df) {
+    obs_values <- suppressWarnings(as.numeric(df[[obs_col]]))
+
+    pos_values <- obs_values[df$positive_control & is.finite(obs_values)]
+    neg_values <- obs_values[df$negative_control & is.finite(obs_values)]
+
+    df$obs_stat_used <- obs_col
+    df$obs_lik_essential <- NA_real_
+    df$obs_lik_nonessential <- NA_real_
+    df$obs_log_lik_essential <- NA_real_
+    df$obs_log_lik_nonessential <- NA_real_
+    df$obs_bayes_factor <- NA_real_
+    df$obs_log_bayes_factor <- NA_real_
+    df$obs_posterior_equal_prior <- NA_real_
+
+    df$obs_likelihood_model <- "kde"
+    df$obs_likelihood_status <- "not_fit"
+    df$obs_likelihood_message <- NA_character_
+
+    df$obs_n_pos_controls <- length(pos_values)
+    df$obs_n_neg_controls <- length(neg_values)
+    df$obs_kde_bw <- as.character(bw)
+    df$obs_kde_adjust <- as.numeric(adjust)
+
+    if (length(pos_values) < 2 || length(neg_values) < 2) {
+      df$obs_likelihood_status <- "not_fit"
+      df$obs_likelihood_message <- "Too few finite control values to fit KDE likelihoods"
+      return(df)
+    }
+
+    lik_pos <- .pu_obs_density_eval_safe(
+      x = obs_values,
+      obs_values = pos_values,
+      bw = bw,
+      adjust = adjust
+    )
+    lik_neg <- .pu_obs_density_eval_safe(
+      x = obs_values,
+      obs_values = neg_values,
+      bw = bw,
+      adjust = adjust
+    )
+
+    lik_pos <- pmax(as.numeric(lik_pos), density_floor)
+    lik_neg <- pmax(as.numeric(lik_neg), density_floor)
+
+    good <- is.finite(obs_values)
+
+    df$obs_lik_essential[good] <- lik_pos[good]
+    df$obs_lik_nonessential[good] <- lik_neg[good]
+    df$obs_log_lik_essential[good] <- log(lik_pos[good])
+    df$obs_log_lik_nonessential[good] <- log(lik_neg[good])
+    df$obs_log_bayes_factor[good] <- log(lik_pos[good]) - log(lik_neg[good])
+    df$obs_bayes_factor[good] <- exp(df$obs_log_bayes_factor[good])
+
+    # Equal-prior posterior: P(E=1|z) with prior 0.5
+    df$obs_posterior_equal_prior[good] <- lik_pos[good] / (lik_pos[good] + lik_neg[good])
+
+    df$obs_likelihood_status <- "fit_ok"
+    df$obs_likelihood_message <- NA_character_
+
+    df
+  })
+
+  dplyr::bind_rows(out)
+}
+
+
+
+
 .pu_obs_build_observation_long_tbl <- function(target_tbl) {
   out <- list()
 
@@ -463,7 +674,22 @@ suppressPackageStartupMessages({
       positive_probability = .data$positive_probability,
       positive_prediction = .data$positive_prediction,
       positive_probability_model_status = .data$positive_probability_model_status,
-      positive_probability_model_message = .data$positive_probability_model_message
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
     )
   out[[length(out) + 1L]] <- avg_tbl
 
@@ -488,7 +714,22 @@ suppressPackageStartupMessages({
       positive_probability = .data$positive_probability,
       positive_prediction = .data$positive_prediction,
       positive_probability_model_status = .data$positive_probability_model_status,
-      positive_probability_model_message = .data$positive_probability_model_message
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
     )
   out[[length(out) + 1L]] <- z_tbl
 
@@ -513,7 +754,22 @@ suppressPackageStartupMessages({
       positive_probability = .data$positive_probability,
       positive_prediction = .data$positive_prediction,
       positive_probability_model_status = .data$positive_probability_model_status,
-      positive_probability_model_message = .data$positive_probability_model_message
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
     )
   out[[length(out) + 1L]] <- prob_tbl
 
@@ -542,7 +798,15 @@ suppressPackageStartupMessages({
         .data$perturbation_pred,
         .data$normalizedPerturbation
       ),
-      prediction_value = as.numeric(.data$pred_mean)
+      prediction_value = as.numeric(.data$pred_mean),
+      prior_pred_mean = suppressWarnings(as.numeric(.data$pred_mean)),
+      prior_pred_sd = suppressWarnings(as.numeric(.data$pred_sd)),
+      prior_pred_var = suppressWarnings(as.numeric(.data$pred_var)),
+      prior_pred_log_var = suppressWarnings(as.numeric(.data$pred_log_var)),
+      prior_pred_pi_lower_95 = suppressWarnings(as.numeric(.data$pred_pi_lower_95)),
+      prior_pred_pi_upper_95 = suppressWarnings(as.numeric(.data$pred_pi_upper_95)),
+      decreasing = .data$decreasing,
+      response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff))
     )
 }
 
@@ -591,6 +855,17 @@ suppressPackageStartupMessages({
     )
   }
 
+  json_num_or_null <- function(x) {
+    v <- suppressWarnings(as.numeric(x))
+    if (length(v) < 1 || is.na(v) || !is.finite(v)) return(NULL)
+    v[[1]]
+  }
+
+  json_bool_or_null <- function(x) {
+    if (length(x) < 1 || is.na(x)) return(NULL)
+    as.logical(x[[1]])
+  }
+
   write_json_file(
     file.path(out_observations_dir, "samples.json"),
     lapply(seq_len(nrow(samples)), function(i) {
@@ -620,7 +895,7 @@ suppressPackageStartupMessages({
   preview_n <- min(1000L, nrow(preview_candidates))
 
   scatter_preview <- list(
-    schemaVersion = 2,
+    schemaVersion = 3,
     generatedAt = as.character(Sys.time()),
     previewSampleId = if (preview_n > 0) as.character(preview_candidates$sample[[1]]) else NULL,
     previewObservationType = if (preview_n > 0) as.character(preview_candidates$observationType[[1]]) else NULL,
@@ -632,10 +907,29 @@ suppressPackageStartupMessages({
         observationType = as.character(row$observationType[[1]]),
         perturbation = as.character(row$perturbation_display[[1]]),
         modelKey = as.character(row$modelKey[[1]]),
-        x = as.numeric(row$prediction_value[[1]]),
-        y = as.numeric(row$observationValue[[1]]),
-        positiveProbability = as.numeric(row$positive_probability[[1]]),
-        scaledTargetLfc = as.numeric(row$scaled_target_lfc[[1]])
+        x = json_num_or_null(row$prediction_value[[1]]),
+        y = json_num_or_null(row$observationValue[[1]]),
+
+        # Existing experimental score
+        positiveProbability = json_num_or_null(row$positive_probability[[1]]),
+        scaledTargetLfc = json_num_or_null(row$scaled_target_lfc[[1]]),
+
+        # Cutoff-free prior ingredients from prediction side
+        priorPredMean = json_num_or_null(row$prior_pred_mean[[1]]),
+        priorPredSd = json_num_or_null(row$prior_pred_sd[[1]]),
+        priorPredVar = json_num_or_null(row$prior_pred_var[[1]]),
+        priorPredLogVar = json_num_or_null(row$prior_pred_log_var[[1]]),
+        priorPredPiLower95 = json_num_or_null(row$prior_pred_pi_lower_95[[1]]),
+        priorPredPiUpper95 = json_num_or_null(row$prior_pred_pi_upper_95[[1]]),
+        decreasing = json_bool_or_null(row$decreasing[[1]]),
+        responseCutoffFromPrediction = json_num_or_null(row$response_cutoff[[1]]),
+
+        # Observation likelihood terms to combine later with any user-selected cutoff
+        obsLikEssential = json_num_or_null(row$obs_lik_essential[[1]]),
+        obsLikNonessential = json_num_or_null(row$obs_lik_nonessential[[1]]),
+        obsBayesFactor = json_num_or_null(row$obs_bayes_factor[[1]]),
+        obsLogBayesFactor = json_num_or_null(row$obs_log_bayes_factor[[1]]),
+        obsPosteriorEqualPrior = json_num_or_null(row$obs_posterior_equal_prior[[1]])
       )
     })
   )
@@ -719,7 +1013,17 @@ powerup_process_observations <- function(
     .pu_obs_add_control_annotations(controls = controls) %>%
     .pu_obs_add_scaled_target_lfc()
 
+  # Keep existing discriminative score
   positive_tbl <- .pu_obs_fit_positive_probability(target_tbl)
+
+  # Add generative KDE likelihood model using target_z
+  positive_tbl <- .pu_obs_fit_kde_likelihood_by_sample(
+    target_tbl = positive_tbl,
+    obs_col = "target_z",
+    bw = "nrd0",
+    adjust = 1,
+    density_floor = 1e-12
+  )
 
   joined_tbl <- .pu_obs_build_joined_tbl(
     target_tbl = positive_tbl,
@@ -772,6 +1076,19 @@ powerup_process_observations <- function(
       !is.na(.data$prediction_value)
     )
 
+  nPriorGaussianRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$prior_pred_mean))) &
+      is.finite(suppressWarnings(as.numeric(joined_tbl$prior_pred_sd))),
+    na.rm = TRUE
+  )
+
+  nObsLikelihoodRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$obs_lik_essential))) &
+      is.finite(suppressWarnings(as.numeric(joined_tbl$obs_lik_nonessential))),
+    na.rm = TRUE
+  )
+
+
   observed_samples <- sort(unique(as.character(
     positive_tbl$sample[!is.na(positive_tbl$sample)]
   )))
@@ -781,7 +1098,7 @@ powerup_process_observations <- function(
   overlapping_samples <- intersect(observed_samples, predicted_samples)
 
   summary <- list(
-    schemaVersion = 2,
+    schemaVersion = 3,
     jobId = job_id,
     observationRunId = observation_run_id,
     ok = TRUE,
@@ -793,6 +1110,8 @@ powerup_process_observations <- function(
       nPositiveProbabilityRows = nrow(positive_tbl),
       nPredictionRows = nrow(pred_tbl),
       nMatchedRows = nrow(matched_rows_only),
+      nPriorGaussianRows = nPriorGaussianRows,
+      nObsLikelihoodRows = nObsLikelihoodRows,
       nObservedSamples = length(observed_samples),
       nPredictedSamples = length(predicted_samples),
       nOverlappingSamples = length(overlapping_samples),
@@ -819,11 +1138,34 @@ powerup_process_observations <- function(
       uploadedNegativeRawCount = if (!is.null(controls$uploaded)) length(controls$uploaded$negativeRaw) else 0L,
       uploadedPositiveNormalizedCount = if (!is.null(controls$uploaded)) length(controls$uploaded$positiveNormalized) else 0L,
       uploadedNegativeNormalizedCount = if (!is.null(controls$uploaded)) length(controls$uploaded$negativeNormalized) else 0L
+    ),
+    posterior = list(
+      mode = "not_precomputed_backend",
+      reason = "frontend cutoff is user-adjustable, so cutoff-specific prior/posterior must be computed dynamically",
+      priorDistribution = list(
+        family = "gaussian",
+        meanColumn = "prior_pred_mean",
+        sdColumn = "prior_pred_sd",
+        varColumn = "prior_pred_var",
+        logVarColumn = "prior_pred_log_var",
+        piLower95Column = "prior_pred_pi_lower_95",
+        piUpper95Column = "prior_pred_pi_upper_95",
+        decreasingColumn = "decreasing"
+      ),
+      observationLikelihood = list(
+        essentialColumn = "obs_lik_essential",
+        nonessentialColumn = "obs_lik_nonessential",
+        bayesFactorColumn = "obs_bayes_factor",
+        logBayesFactorColumn = "obs_log_bayes_factor",
+        equalPriorPosteriorColumn = "obs_posterior_equal_prior",
+        observationStatisticUsed = "target_z",
+        model = "kde"
+      )
     )
   )
 
   manifest <- list(
-    schemaVersion = 2,
+    schemaVersion = 3,
     jobId = job_id,
     observationRunId = observation_run_id,
     mode = "OBSERVATIONS",
