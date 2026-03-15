@@ -17,7 +17,7 @@ make_xgb_model(
   nrounds = 100,
   max_depth = 3,
   f_subsample = 1,
-  min_score = 0.05,
+  min_score = 0.01,
   skip_eval = FALSE,
   shuffle = FALSE,
   n_threads = 4,

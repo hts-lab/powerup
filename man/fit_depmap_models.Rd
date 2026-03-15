@@ -13,7 +13,7 @@ fit_depmap_models(
   nfolds = 3,
   nrepeats = 1,
   nrounds = 200,
-  min_score = 0.05,
+  min_score = 0.01,
   max_depth = 3,
   f_subsample = 1,
   skip_eval = FALSE,
