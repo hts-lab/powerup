@@ -460,8 +460,10 @@ suppressPackageStartupMessages({
   split_tbl <- split(target_tbl, target_tbl$sample, drop = TRUE)
 
   out <- lapply(split_tbl, function(df) {
+    # Historical notebook behavior:
+    # fit positive ~ mean_target_lfc, not scaled_target_lfc
     train_df <- df %>%
-      filter(!is.na(.data$positive), is.finite(.data$scaled_target_lfc))
+      filter(!is.na(.data$positive), is.finite(.data$mean_target_lfc))
 
     fit_status <- "not_fit"
     fit_message <- NA_character_
@@ -473,6 +475,7 @@ suppressPackageStartupMessages({
       df$positive_prediction <- NA
       df$positive_probability_model_status <- fit_status
       df$positive_probability_model_message <- fit_message
+      df$positive_probability_model_feature <- "mean_target_lfc"
       return(df)
     }
 
@@ -483,11 +486,12 @@ suppressPackageStartupMessages({
       df$positive_prediction <- NA
       df$positive_probability_model_status <- fit_status
       df$positive_probability_model_message <- fit_message
+      df$positive_probability_model_feature <- "mean_target_lfc"
       return(df)
     }
 
     fit <- tryCatch(
-      stats::glm(positive ~ scaled_target_lfc, data = train_df, family = "binomial"),
+      stats::glm(positive ~ mean_target_lfc, data = train_df, family = "binomial"),
       error = function(e) e
     )
 
@@ -498,6 +502,7 @@ suppressPackageStartupMessages({
       df$positive_prediction <- NA
       df$positive_probability_model_status <- fit_status
       df$positive_probability_model_message <- fit_message
+      df$positive_probability_model_feature <- "mean_target_lfc"
       return(df)
     }
 
@@ -510,6 +515,7 @@ suppressPackageStartupMessages({
     df$positive_prediction <- ifelse(is.na(df$positive_probability), NA, df$positive_probability >= 0.5)
     df$positive_probability_model_status <- "fit_ok"
     df$positive_probability_model_message <- NA_character_
+    df$positive_probability_model_feature <- "mean_target_lfc"
     df
   })
 
