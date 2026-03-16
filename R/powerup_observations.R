@@ -1022,6 +1022,16 @@ powerup_process_observations <- function(
   # Keep existing discriminative score
   positive_tbl <- .pu_obs_fit_positive_probability(target_tbl)
 
+  fit_feature_examples <- positive_tbl %>%
+    dplyr::distinct(.data$sample, .data$positive_probability_model_feature, .data$positive_probability_model_status) %>%
+    dplyr::arrange(.data$sample)
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "positive_probability_features={paste(unique(fit_feature_examples$positive_probability_model_feature), collapse='|')} ",
+    "fit_statuses={paste(unique(fit_feature_examples$positive_probability_model_status), collapse='|')}"
+  ))
+
   # Add generative KDE likelihood model using target_z
   positive_tbl <- .pu_obs_fit_kde_likelihood_by_sample(
     target_tbl = positive_tbl,
