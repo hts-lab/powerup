@@ -278,16 +278,26 @@ suppressPackageStartupMessages({
     left_join(wide_lfcs, by = c("construct_barcode", "sample"))
 }
 
-.pu_obs_counts_collapse_replicates <- function(lfcs_tbl) {
+.pu_obs_counts_collapse_replicates <- function(lfcs_tbl, ref_sample = NULL) {
+  ref_sample_norm <- if (!is.null(ref_sample) && length(ref_sample) >= 1) {
+    x <- trimws(as.character(ref_sample[[1]]))
+    if (is.na(x) || !nzchar(x)) NA_character_ else tolower(x)
+  } else {
+    NA_character_
+  }
+
   lfcs_tbl %>%
-    filter(!str_detect(.data$sample, "_t0$")) %>%
     mutate(
-      biological_sample = paste(
-        word(.data$sample, 1, sep = "_"),
-        word(.data$sample, 2, sep = "_"),
-        sep = "_"
-      )
+      sample = as.character(.data$sample),
+      sample_norm = tolower(trimws(.data$sample)),
+      is_reference_sample = case_when(
+        !is.na(ref_sample_norm) & .data$sample_norm == ref_sample_norm ~ TRUE,
+        str_detect(.data$sample_norm, "_t0$") ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      biological_sample = str_replace(.data$sample, "_[Rr][0-9]+$", "")
     ) %>%
+    filter(!.data$is_reference_sample) %>%
     group_by(.data$biological_sample, .data$construct_barcode) %>%
     summarize(
       n_replicates = n_distinct(.data$sample),
@@ -300,6 +310,7 @@ suppressPackageStartupMessages({
     ) %>%
     rename(sample = .data$biological_sample)
 }
+
 
 .pu_obs_counts_get_neg_controls <- function(reference_tbl, pattern, fuzzy = FALSE) {
   if (isTRUE(fuzzy)) {
@@ -337,13 +348,23 @@ suppressPackageStartupMessages({
     filter(!is.na(.data$avg_lfc)) %>%
     group_by(.data$sample) %>%
     group_split() %>%
-    purrr::map(~ .x %>% filter(.data$construct_barcode %in% negs)) %>%
-    purrr::map(~ tibble(
-      sample = .pu_obs_first_nonempty(.x$sample),
-      neg_lfc_mean = mean(.x$avg_lfc, na.rm = TRUE),
-      neg_lfc_stdev = stats::sd(.x$avg_lfc, na.rm = TRUE)
-    )) %>%
+    purrr::map(function(x) {
+      neg_x <- x %>% filter(.data$construct_barcode %in% negs)
+      if (nrow(neg_x) < 2) {
+        return(tibble(
+          sample = .pu_obs_first_nonempty(x$sample),
+          neg_lfc_mean = NA_real_,
+          neg_lfc_stdev = NA_real_
+        ))
+      }
+      tibble(
+        sample = .pu_obs_first_nonempty(x$sample),
+        neg_lfc_mean = mean(neg_x$avg_lfc, na.rm = TRUE),
+        neg_lfc_stdev = stats::sd(neg_x$avg_lfc, na.rm = TRUE)
+      )
+    }) %>%
     bind_rows()
+
 
   lfcs_tbl %>%
     left_join(neg_df, by = "sample") %>%
@@ -517,12 +538,17 @@ powerup_process_observations_from_counts <- function(
     .pu_assert_file_exists(config_path, "config_path")
   }
 
-  if (length(analysis_samples) < 2) {
-    stop("[powerup][OBSERVATIONS_COUNTS] analysis_samples must include at least the T0 reference and one analysis sample")
+  reference_sample <- trimws(as.character(reference_sample))[1]
+  if (is.na(reference_sample) || !nzchar(reference_sample)) {
+    stop("[powerup][OBSERVATIONS_COUNTS] reference_sample must be a non-empty string")
   }
 
   analysis_samples <- unique(trimws(as.character(analysis_samples)))
-  analysis_samples <- analysis_samples[nzchar(analysis_samples)]
+  analysis_samples <- analysis_samples[!is.na(analysis_samples) & nzchar(analysis_samples)]
+
+  if (length(analysis_samples) < 2) {
+    stop("[powerup][OBSERVATIONS_COUNTS] analysis_samples must include at least the T0 reference and one analysis sample")
+  }
 
   if (!(reference_sample %in% analysis_samples)) {
     stop("[powerup][OBSERVATIONS_COUNTS] reference_sample must be included in analysis_samples")
@@ -572,7 +598,24 @@ powerup_process_observations_from_counts <- function(
     ref_sample = reference_sample
   )
 
-  lfcs_collapsed <- .pu_obs_counts_collapse_replicates(lfcs_tbl)
+  lfcs_collapsed <- .pu_obs_counts_collapse_replicates(
+    lfcs_tbl = lfcs_tbl,
+    ref_sample = reference_sample
+  )
+
+  if (nrow(lfcs_collapsed) < 1) {
+    stop("[powerup][OBSERVATIONS_COUNTS] no non-reference replicate-collapsed rows remained after collapsing analysis samples")
+  }
+
+  if (length(unique(lfcs_collapsed$sample)) < 1) {
+    stop("[powerup][OBSERVATIONS_COUNTS] no non-reference biological samples remained after collapsing replicates")
+  }
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "collapsed_samples={paste(sort(unique(lfcs_collapsed$sample)), collapse=', ')}"
+  ))
+
 
   new_reference_tbl <- .pu_obs_counts_group_pseudogenes(
     annotations = reference_tbl,
