@@ -121,57 +121,98 @@ suppressPackageStartupMessages({
 .pu_obs_counts_parse_config <- function(config_path = NULL) {
   cfg <- list()
 
-  if (!is.null(config_path) && !is.na(config_path) && nzchar(trimws(config_path))) {
-    .pu_assert_file_exists(config_path, "config_path")
-    cfg <- .pu_obs_read_json_file(config_path)
+  if (!is.null(config_path) && length(config_path) >= 1) {
+    config_path <- as.character(config_path[[1]])
+    if (!is.na(config_path)) {
+      config_path <- trimws(config_path)
+      if (nzchar(config_path)) {
+        .pu_assert_file_exists(config_path, "config_path")
+        cfg <- .pu_obs_read_json_file(config_path)
+      }
+    }
   }
 
-  # Defaults choosen here for now but could be moved to a separate default config file later.
+  # --- guideNegativeControlPatterns ---
   guide_negative_control_patterns <- cfg[["guideNegativeControlPatterns"]]
   if (is.null(guide_negative_control_patterns) || length(guide_negative_control_patterns) < 1) {
     guide_negative_control_patterns <- c("ONE_INTERGENIC_SITE", "NO_SITE")
   }
-  guide_negative_control_patterns <- as.character(unlist(guide_negative_control_patterns, use.names = FALSE))
+  guide_negative_control_patterns <- as.character(
+    unlist(guide_negative_control_patterns, use.names = FALSE)
+  )
+  guide_negative_control_patterns <- guide_negative_control_patterns[
+    !is.na(guide_negative_control_patterns) & nzchar(trimws(guide_negative_control_patterns))
+  ]
+  if (length(guide_negative_control_patterns) < 1) {
+    guide_negative_control_patterns <- c("ONE_INTERGENIC_SITE", "NO_SITE")
+  }
 
+  # --- guideNegativeControlFuzzy ---
   guide_negative_control_fuzzy <- cfg[["guideNegativeControlFuzzy"]]
   if (is.null(guide_negative_control_fuzzy) || length(guide_negative_control_fuzzy) < 1) {
     guide_negative_control_fuzzy <- rep(TRUE, length(guide_negative_control_patterns))
   }
-  guide_negative_control_fuzzy <- as.logical(unlist(guide_negative_control_fuzzy, use.names = FALSE))
+  guide_negative_control_fuzzy <- as.logical(
+    unlist(guide_negative_control_fuzzy, use.names = FALSE)
+  )
+  if (length(guide_negative_control_fuzzy) < 1) {
+    guide_negative_control_fuzzy <- rep(TRUE, length(guide_negative_control_patterns))
+  }
   if (length(guide_negative_control_fuzzy) < length(guide_negative_control_patterns)) {
     guide_negative_control_fuzzy <- c(
       guide_negative_control_fuzzy,
       rep(TRUE, length(guide_negative_control_patterns) - length(guide_negative_control_fuzzy))
     )
   }
+  guide_negative_control_fuzzy <- guide_negative_control_fuzzy[seq_len(length(guide_negative_control_patterns))]
 
+  # --- pseudogeneSize ---
   pseudogene_size <- suppressWarnings(as.integer(cfg[["pseudogeneSize"]]))
+  pseudogene_size <- if (length(pseudogene_size) >= 1) pseudogene_size[[1]] else NA_integer_
   if (is.na(pseudogene_size) || pseudogene_size < 1) pseudogene_size <- 2L
 
+  # --- pseudogeneSeed ---
   pseudogene_seed <- suppressWarnings(as.integer(cfg[["pseudogeneSeed"]]))
+  pseudogene_seed <- if (length(pseudogene_seed) >= 1) pseudogene_seed[[1]] else NA_integer_
   if (is.na(pseudogene_seed)) pseudogene_seed <- 7L
 
+  # --- pseudogeneControlRegex ---
   pseudogene_control_regex <- cfg[["pseudogeneControlRegex"]]
   if (is.null(pseudogene_control_regex) || length(pseudogene_control_regex) < 1) {
     pseudogene_control_regex <- c("ONE_INTERGENIC_SITE", "NO_SITE")
   }
-  pseudogene_control_regex <- as.character(unlist(pseudogene_control_regex, use.names = FALSE))
+  pseudogene_control_regex <- as.character(
+    unlist(pseudogene_control_regex, use.names = FALSE)
+  )
+  pseudogene_control_regex <- pseudogene_control_regex[
+    !is.na(pseudogene_control_regex) & nzchar(trimws(pseudogene_control_regex))
+  ]
+  if (length(pseudogene_control_regex) < 1) {
+    pseudogene_control_regex <- c("ONE_INTERGENIC_SITE", "NO_SITE")
+  }
 
+  # --- lowCountZCutoff ---
   low_count_z_cutoff <- suppressWarnings(as.numeric(cfg[["lowCountZCutoff"]]))
+  low_count_z_cutoff <- if (length(low_count_z_cutoff) >= 1) low_count_z_cutoff[[1]] else NA_real_
   if (is.na(low_count_z_cutoff)) low_count_z_cutoff <- -3
 
+  # --- sdCutoff ---
   sd_cutoff <- suppressWarnings(as.numeric(cfg[["sdCutoff"]]))
+  sd_cutoff <- if (length(sd_cutoff) >= 1) sd_cutoff[[1]] else NA_real_
   if (is.na(sd_cutoff)) sd_cutoff <- NA_real_
 
+  # --- minGuides ---
   min_guides <- suppressWarnings(as.integer(cfg[["minGuides"]]))
+  min_guides <- if (length(min_guides) >= 1) min_guides[[1]] else NA_integer_
   if (is.na(min_guides) || min_guides < 0) min_guides <- 2L
 
+  # --- includeUnexpressed ---
   include_unexpressed <- cfg[["includeUnexpressed"]]
   if (is.null(include_unexpressed)) {
     include_unexpressed <- character(0)
   } else {
     include_unexpressed <- unique(trimws(as.character(unlist(include_unexpressed, use.names = FALSE))))
-    include_unexpressed <- include_unexpressed[nzchar(include_unexpressed)]
+    include_unexpressed <- include_unexpressed[!is.na(include_unexpressed) & nzchar(include_unexpressed)]
   }
 
   list(
@@ -186,6 +227,7 @@ suppressPackageStartupMessages({
     includeUnexpressed = include_unexpressed
   )
 }
+
 
 .pu_obs_counts_attach_reference <- function(df, reference_tbl) {
   ref_dedup <- reference_tbl %>%
@@ -534,9 +576,13 @@ powerup_process_observations_from_counts <- function(
   if (!is.null(negative_controls_path) && !is.na(negative_controls_path) && nzchar(trimws(negative_controls_path))) {
     .pu_assert_file_exists(negative_controls_path, "negative_controls_path")
   }
-  if (!is.null(config_path) && !is.na(config_path) && nzchar(trimws(config_path))) {
-    .pu_assert_file_exists(config_path, "config_path")
-  }
+  if (!is.null(config_path) && length(config_path) >= 1) {
+    config_path <- as.character(config_path[[1]])
+    if (!is.na(config_path) && nzchar(trimws(config_path))) {
+      .pu_assert_file_exists(config_path, "config_path")
+    }
+  } 
+
 
   reference_sample <- trimws(as.character(reference_sample))[1]
   if (is.na(reference_sample) || !nzchar(reference_sample)) {
@@ -554,7 +600,21 @@ powerup_process_observations_from_counts <- function(
     stop("[powerup][OBSERVATIONS_COUNTS] reference_sample must be included in analysis_samples")
   }
 
-  cfg <- .pu_obs_counts_parse_config(config_path)
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "config_path={if (is.null(config_path)) '<NULL>' else config_path}"
+  ))
+
+  cfg <- tryCatch(
+    .pu_obs_counts_parse_config(config_path),
+    error = function(e) {
+      message(glue(
+        "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+        "CONFIG_PARSE_FAILED err={conditionMessage(e)}"
+      ))
+      stop(e)
+    }
+  )
   schema_obj <- .pu_obs_read_json_file(schema_path)
 
   message(glue(
