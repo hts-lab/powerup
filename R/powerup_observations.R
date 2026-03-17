@@ -808,7 +808,6 @@ suppressPackageStartupMessages({
       )
     )
 
-  # 1) Exact sample match first
   exact_join_tbl <- pred_prepped_tbl %>%
     inner_join(
       obs_long_tbl,
@@ -824,7 +823,6 @@ suppressPackageStartupMessages({
       prediction_sample_base = .data$sample_base_pred
     )
 
-  # 2) Identify observation rows not matched exactly
   obs_unmatched_tbl <- obs_long_tbl %>%
     anti_join(
       exact_join_tbl %>%
@@ -836,7 +834,6 @@ suppressPackageStartupMessages({
       by = c("sample", "normalizedPerturbation", "observationType")
     )
 
-  # 3) Fallback match on base sample name
   fallback_join_tbl <- pred_prepped_tbl %>%
     inner_join(
       obs_unmatched_tbl,
@@ -852,12 +849,31 @@ suppressPackageStartupMessages({
       prediction_sample_base = .data$sample_base
     )
 
-  joined_tbl <- bind_rows(exact_join_tbl, fallback_join_tbl) %>%
-    mutate(
-      # canonical joined sample should always be the observation sample
-      sample = dplyr::coalesce(.data$observation_sample, .data$sample, .data$sample_obs),
-      sample_base = dplyr::coalesce(.data$observation_sample_base, .data$sample_base_obs, .data$sample_base),
+  joined_tbl <- bind_rows(exact_join_tbl, fallback_join_tbl)
 
+  required_after_join <- c(
+    "perturbation_obs",
+    "perturbation_pred",
+    "pred_mean",
+    "pred_sd",
+    "pred_var",
+    "pred_log_var",
+    "pred_pi_lower_95",
+    "pred_pi_upper_95",
+    "decreasing",
+    "response_cutoff"
+  )
+  missing_after_join <- setdiff(required_after_join, colnames(joined_tbl))
+  if (length(missing_after_join) > 0) {
+    stop(glue(
+      "[powerup][OBSERVATIONS] joined table missing expected columns after join: ",
+      "{paste(missing_after_join, collapse=', ')}. ",
+      "Available columns: {paste(colnames(joined_tbl), collapse=', ')}"
+    ))
+  }
+
+  joined_tbl %>%
+    mutate(
       perturbation_display = dplyr::coalesce(
         .data$perturbation_obs,
         .data$perturbation_pred,
@@ -873,15 +889,8 @@ suppressPackageStartupMessages({
       decreasing = .data$decreasing,
       response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff))
     )
-
-  message(glue(
-    "[powerup][OBS_JOIN] exact_rows={sum(joined_tbl$sample_match_type == 'exact', na.rm = TRUE)} ",
-    "fallback_rows={sum(joined_tbl$sample_match_type == 'base_fallback', na.rm = TRUE)} ",
-    "total_rows={nrow(joined_tbl)}"
-  ))
-
-  joined_tbl
 }
+
 
 
 

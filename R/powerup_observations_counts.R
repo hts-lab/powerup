@@ -91,6 +91,22 @@ suppressPackageStartupMessages({
   x
 }
 
+.pu_obs_counts_step <- function(step_name, expr) {
+  message(glue("[powerup][OBSERVATIONS_COUNTS] STEP_START {step_name}"))
+  out <- tryCatch(
+    force(expr),
+    error = function(e) {
+      message(glue(
+        "[powerup][OBSERVATIONS_COUNTS] STEP_FAIL {step_name} err={conditionMessage(e)}"
+      ))
+      stop(e)
+    }
+  )
+  message(glue("[powerup][OBSERVATIONS_COUNTS] STEP_DONE {step_name}"))
+  out
+}
+
+
 .pu_obs_counts_read_reference_required <- function(reference_path) {
   .pu_assert_file_exists(reference_path, "reference_path")
 
@@ -907,68 +923,120 @@ powerup_process_observations_from_counts <- function(
   ))
 
 
-  new_reference_tbl <- .pu_obs_counts_group_pseudogenes(
-    annotations = reference_tbl,
-    pseudogene_size = cfg$pseudogeneSize,
-    gene_col = "gene_symbol",
-    control_regex = cfg$pseudogeneControlRegex,
-    seed = cfg$pseudogeneSeed
+  new_reference_tbl <- .pu_obs_counts_step(
+    "group_pseudogenes",
+    .pu_obs_counts_group_pseudogenes(
+      annotations = reference_tbl,
+      pseudogene_size = cfg$pseudogeneSize,
+      gene_col = "gene_symbol",
+      control_regex = cfg$pseudogeneControlRegex,
+      seed = cfg$pseudogeneSeed
+    )
   )
 
-  target_tbl <- .pu_obs_counts_get_targets_table(
-    lfcs_collapsed = lfcs_collapsed,
-    reference_tbl = reference_tbl,
-    new_reference_tbl = new_reference_tbl,
-    neg_controls_pattern = cfg$guideNegativeControlPatterns,
-    neg_controls_fuzzy = cfg$guideNegativeControlFuzzy,
-    pos_controls = pos_controls,
-    neg_controls = neg_controls,
-    include_unexpressed = cfg$includeUnexpressed,
-    sd_cutoff = cfg$sdCutoff,
-    min_guides = cfg$minGuides
-  ) %>%
-    mutate(
-      sample = .pu_obs_counts_clean_colname(.data$sample),
-      sample_base = .pu_obs_counts_base_sample(.data$sample),
-      perturbation = as.character(.data$gene_symbol),
-      normalizedPerturbation = .pu_obs_normalize_perturbation(.data$gene_symbol, response_set = "crispr"),
-      control = case_when(
-        .data$positive_control ~ "positive",
-        .data$negative_control ~ "negative",
-        TRUE ~ NA_character_
-      ),
-      category_input = as.character(.data$category),
-      primaryObservationType = "z_scored_avg_lfc",
-      primaryObservationValue = suppressWarnings(as.numeric(.data$target_z))
-    ) %>%
-    select(
-      .data$sample,
-      .data$sample_base,
-      .data$perturbation,
-      .data$normalizedPerturbation,
-      .data$gene_symbol,
-      .data$mean_target_lfc,
-      .data$target_z,
-      .data$target_z_pvalue,
-      .data$target_z_fdr,
-      .data$n_guides,
-      .data$control,
-      .data$category_input,
-      .data$primaryObservationType,
-      .data$primaryObservationValue,
-      .data$control_class,
-      .data$positive_control,
-      .data$negative_control,
-      .data$positive,
-      .data$neg_lfc_median,
-      .data$pos_lfc_median,
-      .data$scaled_target_lfc,
-      .data$positive_probability,
-      .data$positive_prediction,
-      .data$positive_probability_model_status,
-      .data$positive_probability_model_message
-    )
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] new_reference_tbl rows={nrow(new_reference_tbl)} cols={paste(colnames(new_reference_tbl), collapse=', ')}"
+  ))
 
+  target_tbl <- .pu_obs_counts_step(
+    "get_targets_table",
+    .pu_obs_counts_get_targets_table(
+      lfcs_collapsed = lfcs_collapsed,
+      reference_tbl = reference_tbl,
+      new_reference_tbl = new_reference_tbl,
+      neg_controls_pattern = cfg$guideNegativeControlPatterns,
+      neg_controls_fuzzy = cfg$guideNegativeControlFuzzy,
+      pos_controls = pos_controls,
+      neg_controls = neg_controls,
+      include_unexpressed = cfg$includeUnexpressed,
+      sd_cutoff = cfg$sdCutoff,
+      min_guides = cfg$minGuides
+    )
+  )
+
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] target_tbl_pre_mutate rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
+  ))
+
+  target_tbl <- .pu_obs_counts_step(
+    "decorate_target_tbl",
+    target_tbl %>%
+      mutate(
+        sample = .pu_obs_counts_clean_colname(.data$sample),
+        sample_base = .pu_obs_counts_base_sample(.data$sample),
+        perturbation = as.character(.data$gene_symbol),
+        normalizedPerturbation = .pu_obs_normalize_perturbation(.data$gene_symbol, response_set = "crispr"),
+        control = case_when(
+          .data$positive_control ~ "positive",
+          .data$negative_control ~ "negative",
+          TRUE ~ NA_character_
+        ),
+        category_input = as.character(.data$category),
+        primaryObservationType = "z_scored_avg_lfc",
+        primaryObservationValue = suppressWarnings(as.numeric(.data$target_z))
+      ) %>%
+      select(
+        .data$sample,
+        .data$sample_base,
+        .data$perturbation,
+        .data$normalizedPerturbation,
+        .data$gene_symbol,
+        .data$mean_target_lfc,
+        .data$target_z,
+        .data$target_z_pvalue,
+        .data$target_z_fdr,
+        .data$n_guides,
+        .data$control,
+        .data$category_input,
+        .data$primaryObservationType,
+        .data$primaryObservationValue,
+        .data$control_class,
+        .data$positive_control,
+        .data$negative_control,
+        .data$positive,
+        .data$neg_lfc_median,
+        .data$pos_lfc_median,
+        .data$scaled_target_lfc,
+        .data$positive_probability,
+        .data$positive_prediction,
+        .data$positive_probability_model_status,
+        .data$positive_probability_model_message
+      )
+  )
+
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] target_tbl_post_mutate rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
+  ))
+
+  target_tbl <- .pu_obs_counts_step(
+    "fit_kde_likelihood",
+    .pu_obs_fit_kde_likelihood_by_sample(
+      target_tbl = target_tbl,
+      obs_col = "target_z",
+      bw = "nrd0",
+      adjust = 1,
+      density_floor = 1e-12
+    )
+  )
+
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] target_tbl_post_kde rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
+  ))
+
+  joined_tbl <- .pu_obs_counts_step(
+    "build_joined_tbl",
+    .pu_obs_build_joined_tbl(
+      target_tbl = target_tbl,
+      pred_tbl = pred_tbl,
+      response_set = response_set
+    )
+  )
+
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] joined_tbl rows={nrow(joined_tbl)} cols={paste(colnames(joined_tbl), collapse=', ')}"
+  ))
+
+  
   # Add generative KDE likelihood model using target_z, same as current observations pipeline.
   target_tbl <- .pu_obs_fit_kde_likelihood_by_sample(
     target_tbl = target_tbl,
