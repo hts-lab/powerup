@@ -782,29 +782,88 @@ suppressPackageStartupMessages({
   dplyr::bind_rows(out)
 }
 
-.pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set) {
-  obs_long_tbl <- .pu_obs_build_observation_long_tbl(target_tbl)
 
-  pred_tbl %>%
+.pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set) {
+  obs_long_tbl <- .pu_obs_build_observation_long_tbl(target_tbl) %>%
     mutate(
-      sample = as.character(.data$cell_line),
+      sample = .pu_obs_counts_clean_colname(as.character(.data$sample)),
+      sample_base = if ("sample_base" %in% colnames(.)) {
+        .pu_obs_counts_clean_colname(as.character(.data$sample_base))
+      } else {
+        .pu_obs_counts_base_sample(as.character(.data$sample))
+      },
+      normalizedPerturbation = .pu_obs_normalize_perturbation(
+        .data$normalizedPerturbation,
+        response_set = response_set
+      )
+    )
+
+  pred_prepped_tbl <- pred_tbl %>%
+    mutate(
+      sample = .pu_obs_counts_clean_colname(as.character(.data$cell_line)),
+      sample_base = .pu_obs_counts_base_sample(as.character(.data$cell_line)),
       normalizedPerturbation = .pu_obs_normalize_perturbation(
         .data$perturbation,
         response_set = response_set
       )
-    ) %>%
+    )
+
+  # 1) Exact sample match first
+  exact_join_tbl <- pred_prepped_tbl %>%
     inner_join(
       obs_long_tbl,
       by = c("sample", "normalizedPerturbation"),
       suffix = c("_pred", "_obs")
     ) %>%
     mutate(
+      sample_match_type = "exact",
+      observation_sample = .data$sample,
+      observation_sample_base = .data$sample_base_obs,
+      prediction_cell_line = as.character(.data$cell_line),
+      prediction_sample = .data$sample,
+      prediction_sample_base = .data$sample_base_pred
+    )
+
+  # 2) Identify observation rows not matched exactly
+  obs_unmatched_tbl <- obs_long_tbl %>%
+    anti_join(
+      exact_join_tbl %>%
+        distinct(
+          .data$sample,
+          .data$normalizedPerturbation,
+          .data$observationType
+        ),
+      by = c("sample", "normalizedPerturbation", "observationType")
+    )
+
+  # 3) Fallback match on base sample name
+  fallback_join_tbl <- pred_prepped_tbl %>%
+    inner_join(
+      obs_unmatched_tbl,
+      by = c("sample_base", "normalizedPerturbation"),
+      suffix = c("_pred", "_obs")
+    ) %>%
+    mutate(
+      sample_match_type = "base_fallback",
+      observation_sample = .data$sample_obs,
+      observation_sample_base = .data$sample_base,
+      prediction_cell_line = as.character(.data$cell_line),
+      prediction_sample = .data$sample_pred,
+      prediction_sample_base = .data$sample_base
+    )
+
+  joined_tbl <- bind_rows(exact_join_tbl, fallback_join_tbl) %>%
+    mutate(
+      # canonical joined sample should always be the observation sample
+      sample = dplyr::coalesce(.data$observation_sample, .data$sample, .data$sample_obs),
+      sample_base = dplyr::coalesce(.data$observation_sample_base, .data$sample_base_obs, .data$sample_base),
+
       perturbation_display = dplyr::coalesce(
         .data$perturbation_obs,
         .data$perturbation_pred,
         .data$normalizedPerturbation
       ),
-      prediction_value = as.numeric(.data$pred_mean),
+      prediction_value = suppressWarnings(as.numeric(.data$pred_mean)),
       prior_pred_mean = suppressWarnings(as.numeric(.data$pred_mean)),
       prior_pred_sd = suppressWarnings(as.numeric(.data$pred_sd)),
       prior_pred_var = suppressWarnings(as.numeric(.data$pred_var)),
@@ -814,7 +873,17 @@ suppressPackageStartupMessages({
       decreasing = .data$decreasing,
       response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff))
     )
+
+  message(glue(
+    "[powerup][OBS_JOIN] exact_rows={sum(joined_tbl$sample_match_type == 'exact', na.rm = TRUE)} ",
+    "fallback_rows={sum(joined_tbl$sample_match_type == 'base_fallback', na.rm = TRUE)} ",
+    "total_rows={nrow(joined_tbl)}"
+  ))
+
+  joined_tbl
 }
+
+
 
 .pu_obs_write_outputs <- function(
   target_tbl,
@@ -1105,13 +1174,22 @@ powerup_process_observations <- function(
   )
 
 
-  observed_samples <- sort(unique(as.character(
-    positive_tbl$sample[!is.na(positive_tbl$sample)]
-  )))
-  predicted_samples <- sort(unique(as.character(
-    pred_tbl$cell_line[!is.na(pred_tbl$cell_line)]
-  )))
-  overlapping_samples <- intersect(observed_samples, predicted_samples)
+observed_samples <- sort(unique(as.character(
+  target_tbl$sample[!is.na(target_tbl$sample)]
+)))
+predicted_samples <- sort(unique(as.character(
+  pred_tbl$cell_line[!is.na(pred_tbl$cell_line)]
+)))
+
+observed_samples_clean <- sort(unique(.pu_obs_counts_clean_colname(observed_samples)))
+predicted_samples_clean <- sort(unique(.pu_obs_counts_clean_colname(predicted_samples)))
+
+observed_sample_bases <- sort(unique(.pu_obs_counts_base_sample(observed_samples)))
+predicted_sample_bases <- sort(unique(.pu_obs_counts_base_sample(predicted_samples)))
+
+overlapping_samples <- intersect(observed_samples_clean, predicted_samples_clean)
+overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_bases)
+
 
   summary <- list(
     schemaVersion = 3,
@@ -1136,11 +1214,14 @@ powerup_process_observations <- function(
       nOverlappingPerturbations = length(overlapping_perts),
       nObservationTypes = length(unique(obs_long$observationType))
     ),
-    sampleOverlap = list(
-      overlapping = head(overlapping_samples, 50),
-      observedOnly = head(setdiff(observed_samples, predicted_samples), 50),
-      predictedOnly = head(setdiff(predicted_samples, observed_samples), 50)
-    ),
+sampleOverlap = list(
+  overlappingExact = head(overlapping_samples, 50),
+  overlappingBase = head(overlapping_sample_bases, 50),
+  observedOnlyExact = head(setdiff(observed_samples_clean, predicted_samples_clean), 50),
+  predictedOnlyExact = head(setdiff(predicted_samples_clean, observed_samples_clean), 50),
+  observedBasesOnly = head(setdiff(observed_sample_bases, predicted_sample_bases), 50),
+  predictedBasesOnly = head(setdiff(predicted_sample_bases, observed_sample_bases), 50)
+),
     perturbationOverlap = list(
       overlapping = head(overlapping_perts, 50),
       observedOnly = head(setdiff(observed_perts, predicted_perts), 50),

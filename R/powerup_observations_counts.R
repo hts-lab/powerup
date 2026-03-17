@@ -21,6 +21,43 @@ suppressPackageStartupMessages({
 # Counts-mode helpers
 # -----------------------------
 
+.pu_obs_counts_find_col <- function(colnames_vec, candidates) {
+  if (length(colnames_vec) < 1) {
+    return(NA_character_)
+  }
+
+  raw_names <- as.character(colnames_vec)
+  norm_names <- gsub("[^a-z0-9]+", "", tolower(trimws(raw_names)))
+
+  candidate_norm <- gsub("[^a-z0-9]+", "", tolower(trimws(as.character(candidates))))
+  candidate_norm <- unique(candidate_norm[nzchar(candidate_norm)])
+
+  hit_idx <- match(candidate_norm, norm_names, nomatch = 0L)
+  hit_idx <- hit_idx[hit_idx > 0]
+
+  if (length(hit_idx) < 1) {
+    return(NA_character_)
+  }
+
+  raw_names[[hit_idx[[1]]]]
+}
+
+.pu_obs_counts_clean_colname <- function(x) {
+  x <- as.character(x)
+  x <- .pu_obs_make_clean_name(x)
+  x <- as.character(x)
+  x
+}
+
+.pu_obs_counts_base_sample <- function(x) {
+  x <- .pu_obs_counts_clean_colname(x)
+  x <- gsub("_[^_]+$", "", x, perl = TRUE)
+  x <- trimws(as.character(x))
+  x[is.na(x)] <- ""
+  x
+}
+
+
 .pu_obs_counts_read_reference_required <- function(reference_path) {
   .pu_assert_file_exists(reference_path, "reference_path")
 
@@ -31,39 +68,78 @@ suppressPackageStartupMessages({
   ) %>%
     tibble::as_tibble()
 
+  original_colnames <- colnames(ref_tbl)
   colnames(ref_tbl) <- .pu_obs_make_clean_name(colnames(ref_tbl))
+  cleaned_colnames <- colnames(ref_tbl)
 
-  barcode_col <- intersect(
-    c("barcode_sequence", "construct_barcode"),
-    colnames(ref_tbl)
-  )[1]
-  gene_col <- intersect(
-    c("gene_symbol", "gene"),
-    colnames(ref_tbl)
-  )[1]
-  gene_id_col <- intersect(
-    c("gene_id"),
-    colnames(ref_tbl)
-  )[1]
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] guide_reference original columns: {paste(original_colnames, collapse=', ')}"
+  ))
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] guide_reference cleaned columns: {paste(cleaned_colnames, collapse=', ')}"
+  ))
+
+  barcode_col <- .pu_obs_counts_find_col(
+    colnames(ref_tbl),
+    c(
+      "barcode_sequence",
+      "construct_barcode",
+      "barcodesequence",
+      "constructbarcode",
+      "barcode sequence",
+      "construct barcode"
+    )
+  )
+
+  gene_col <- .pu_obs_counts_find_col(
+    colnames(ref_tbl),
+    c(
+      "gene_symbol",
+      "gene",
+      "genesymbol",
+      "gene symbol"
+    )
+  )
+
+  gene_id_col <- .pu_obs_counts_find_col(
+    colnames(ref_tbl),
+    c(
+      "gene_id",
+      "geneid",
+      "gene id"
+    )
+  )
 
   if (is.na(barcode_col) || !nzchar(barcode_col)) {
-    stop("[powerup][OBSERVATIONS_COUNTS] reference file missing barcode_sequence/construct_barcode column")
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] reference file missing barcode_sequence/construct_barcode column. ",
+      "Available cleaned columns: {paste(colnames(ref_tbl), collapse=', ')}"
+    ))
   }
+
   if (is.na(gene_col) || !nzchar(gene_col)) {
-    stop("[powerup][OBSERVATIONS_COUNTS] reference file missing gene_symbol/gene column")
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] reference file missing gene_symbol/gene column. ",
+      "Available cleaned columns: {paste(colnames(ref_tbl), collapse=', ')}"
+    ))
   }
 
   ref_tbl <- ref_tbl %>%
     transmute(
       construct_barcode = as.character(.data[[barcode_col]]),
       gene_symbol = as.character(.data[[gene_col]]),
-      gene_id = if (!is.na(gene_id_col) && nzchar(gene_id_col)) as.character(.data[[gene_id_col]]) else NA_character_
+      gene_id = if (!is.na(gene_id_col) && nzchar(gene_id_col)) {
+        as.character(.data[[gene_id_col]])
+      } else {
+        NA_character_
+      }
     ) %>%
     filter(!is.na(.data$construct_barcode), nzchar(.data$construct_barcode)) %>%
     distinct()
 
   ref_tbl
 }
+
 
 .pu_obs_counts_read_counts_required <- function(counts_path) {
   .pu_assert_file_exists(counts_path, "counts_path")
@@ -83,19 +159,47 @@ suppressPackageStartupMessages({
     ) %>% tibble::as_tibble()
   }
 
+  original_colnames <- colnames(counts_tbl)
   colnames(counts_tbl) <- .pu_obs_make_clean_name(colnames(counts_tbl))
+  cleaned_colnames <- colnames(counts_tbl)
 
-  barcode_col <- intersect(
-    c("construct_barcode", "barcode_sequence"),
-    colnames(counts_tbl)
-  )[1]
-  construct_id_col <- intersect(
-    c("construct_i_ds", "construct_ids", "construct_id"),
-    colnames(counts_tbl)
-  )[1]
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] raw_counts original columns: {paste(original_colnames, collapse=', ')}"
+  ))
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] raw_counts cleaned columns: {paste(cleaned_colnames, collapse=', ')}"
+  ))
+
+  barcode_col <- .pu_obs_counts_find_col(
+    colnames(counts_tbl),
+    c(
+      "construct_barcode",
+      "barcode_sequence",
+      "constructbarcode",
+      "barcodesequence",
+      "construct barcode",
+      "barcode sequence"
+    )
+  )
+
+  construct_id_col <- .pu_obs_counts_find_col(
+    colnames(counts_tbl),
+    c(
+      "construct_id",
+      "construct_ids",
+      "construct_i_ds",
+      "constructid",
+      "constructids",
+      "construct id",
+      "construct ids"
+    )
+  )
 
   if (is.na(barcode_col) || !nzchar(barcode_col)) {
-    stop("[powerup][OBSERVATIONS_COUNTS] counts file missing construct_barcode/barcode_sequence column")
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] counts file missing construct_barcode/barcode_sequence column. ",
+      "Available cleaned columns: {paste(colnames(counts_tbl), collapse=', ')}"
+    ))
   }
 
   counts_tbl <- counts_tbl %>%
@@ -117,6 +221,7 @@ suppressPackageStartupMessages({
 
   counts_tbl
 }
+
 
 .pu_obs_counts_parse_config <- function(config_path = NULL) {
   cfg <- list()
@@ -238,6 +343,13 @@ suppressPackageStartupMessages({
 }
 
 .pu_obs_counts_lognorm <- function(counts_tbl, sample_cols) {
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] lognorm sample_cols={paste(sample_cols, collapse=', ')}"
+  ))
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] lognorm available_cols={paste(colnames(counts_tbl), collapse=', ')}"
+  ))
+
   missing_cols <- setdiff(sample_cols, colnames(counts_tbl))
   if (length(missing_cols) > 0) {
     stop(glue(
@@ -321,23 +433,27 @@ suppressPackageStartupMessages({
 }
 
 .pu_obs_counts_collapse_replicates <- function(lfcs_tbl, ref_sample = NULL) {
-  ref_sample_norm <- if (!is.null(ref_sample) && length(ref_sample) >= 1) {
-    x <- trimws(as.character(ref_sample[[1]]))
-    if (is.na(x) || !nzchar(x)) NA_character_ else tolower(x)
-  } else {
-    NA_character_
-  }
+
+    ref_sample_norm <- if (!is.null(ref_sample) && length(ref_sample) >= 1) {
+      x <- as.character(ref_sample[[1]])
+      x <- .pu_obs_counts_clean_colname(x)[1]
+      if (is.na(x) || !nzchar(x)) NA_character_ else x
+    } else {
+      NA_character_
+    }
 
   lfcs_tbl %>%
     mutate(
-      sample = as.character(.data$sample),
-      sample_norm = tolower(trimws(.data$sample)),
+      sample = .pu_obs_counts_clean_colname(as.character(.data$sample)),
+      sample_norm = .data$sample,
       is_reference_sample = case_when(
         !is.na(ref_sample_norm) & .data$sample_norm == ref_sample_norm ~ TRUE,
         str_detect(.data$sample_norm, "_t0$") ~ TRUE,
         TRUE ~ FALSE
       ),
-      biological_sample = str_replace(.data$sample, "_[Rr][0-9]+$", "")
+      biological_sample = .pu_obs_counts_clean_colname(
+        str_replace(.data$sample, "_[Rr][0-9]+$", "")
+      )
     ) %>%
     filter(!.data$is_reference_sample) %>%
     group_by(.data$biological_sample, .data$construct_barcode) %>%
@@ -570,35 +686,84 @@ powerup_process_observations_from_counts <- function(
   .pu_assert_file_exists(schema_path, "schema_path")
   .pu_assert_file_exists(predictions_path, "predictions_path")
 
-  if (!is.null(positive_controls_path) && !is.na(positive_controls_path) && nzchar(trimws(positive_controls_path))) {
-    .pu_assert_file_exists(positive_controls_path, "positive_controls_path")
+  if (!is.null(positive_controls_path) && length(positive_controls_path) >= 1) {
+    positive_controls_path <- as.character(positive_controls_path[[1]])
+    if (!is.na(positive_controls_path) && nzchar(trimws(positive_controls_path))) {
+      .pu_assert_file_exists(positive_controls_path, "positive_controls_path")
+    } else {
+      positive_controls_path <- NULL
+    }
+  } else {
+    positive_controls_path <- NULL
   }
-  if (!is.null(negative_controls_path) && !is.na(negative_controls_path) && nzchar(trimws(negative_controls_path))) {
-    .pu_assert_file_exists(negative_controls_path, "negative_controls_path")
+
+  if (!is.null(negative_controls_path) && length(negative_controls_path) >= 1) {
+    negative_controls_path <- as.character(negative_controls_path[[1]])
+    if (!is.na(negative_controls_path) && nzchar(trimws(negative_controls_path))) {
+      .pu_assert_file_exists(negative_controls_path, "negative_controls_path")
+    } else {
+      negative_controls_path <- NULL
+    }
+  } else {
+    negative_controls_path <- NULL
   }
+
   if (!is.null(config_path) && length(config_path) >= 1) {
     config_path <- as.character(config_path[[1]])
     if (!is.na(config_path) && nzchar(trimws(config_path))) {
       .pu_assert_file_exists(config_path, "config_path")
+    } else {
+      config_path <- NULL
     }
+  } else {
+    config_path <- NULL
   }
 
 
-  reference_sample <- trimws(as.character(reference_sample))[1]
-  if (is.na(reference_sample) || !nzchar(reference_sample)) {
+  reference_sample_raw <- trimws(as.character(reference_sample))[1]
+  if (is.na(reference_sample_raw) || !nzchar(reference_sample_raw)) {
     stop("[powerup][OBSERVATIONS_COUNTS] reference_sample must be a non-empty string")
   }
 
-  analysis_samples <- unique(trimws(as.character(analysis_samples)))
-  analysis_samples <- analysis_samples[!is.na(analysis_samples) & nzchar(analysis_samples)]
+  analysis_samples_raw <- unique(trimws(as.character(analysis_samples)))
+  analysis_samples_raw <- analysis_samples_raw[!is.na(analysis_samples_raw) & nzchar(analysis_samples_raw)]
 
-  if (length(analysis_samples) < 2) {
+  if (length(analysis_samples_raw) < 2) {
     stop("[powerup][OBSERVATIONS_COUNTS] analysis_samples must include at least the T0 reference and one analysis sample")
   }
 
-  if (!(reference_sample %in% analysis_samples)) {
+  if (!(reference_sample_raw %in% analysis_samples_raw)) {
     stop("[powerup][OBSERVATIONS_COUNTS] reference_sample must be included in analysis_samples")
   }
+
+  reference_sample <- .pu_obs_counts_clean_colname(reference_sample_raw)[1]
+  analysis_samples <- unique(.pu_obs_counts_clean_colname(analysis_samples_raw))
+  analysis_samples <- analysis_samples[!is.na(analysis_samples) & nzchar(analysis_samples)]
+
+  if (length(analysis_samples) < 2) {
+    stop("[powerup][OBSERVATIONS_COUNTS] analysis_samples resolved to fewer than 2 cleaned sample names")
+  }
+
+  if (!(reference_sample %in% analysis_samples)) {
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] cleaned reference_sample '{reference_sample}' must be included in cleaned analysis_samples: ",
+      "{paste(analysis_samples, collapse=', ')}"
+    ))
+  }
+
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "reference_sample_raw={reference_sample_raw} reference_sample_clean={reference_sample}"
+  ))
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "analysis_samples_raw={paste(analysis_samples_raw, collapse=', ')}"
+  ))
+  message(glue(
+    "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+    "analysis_samples_clean={paste(analysis_samples, collapse=', ')}"
+  ))
+
 
   message(glue(
     "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
@@ -623,7 +788,17 @@ powerup_process_observations_from_counts <- function(
   ))
 
   counts_tbl <- .pu_obs_counts_read_counts_required(counts_path)
+  message(glue(
+  "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+  "counts_tbl columns after normalization={paste(colnames(counts_tbl), collapse=', ')}"
+))
+
   reference_tbl <- .pu_obs_counts_read_reference_required(reference_path)
+  message(glue(
+  "[powerup][jobId={job_id}][observationRunId={observation_run_id}] ",
+  "reference_tbl columns after normalization={paste(colnames(reference_tbl), collapse=', ')}"
+))
+
   pred_tbl <- .pu_obs_load_predictions_required(predictions_path)
 
   # Resolve user-supplied control lists exactly, then normalize to CRISPR perturbations later.
@@ -698,6 +873,8 @@ powerup_process_observations_from_counts <- function(
     min_guides = cfg$minGuides
   ) %>%
     mutate(
+      sample = .pu_obs_counts_clean_colname(.data$sample),
+      sample_base = .pu_obs_counts_base_sample(.data$sample),
       perturbation = as.character(.data$gene_symbol),
       normalizedPerturbation = .pu_obs_normalize_perturbation(.data$gene_symbol, response_set = "crispr"),
       control = case_when(
@@ -711,6 +888,7 @@ powerup_process_observations_from_counts <- function(
     ) %>%
     select(
       .data$sample,
+      .data$sample_base,
       .data$perturbation,
       .data$normalizedPerturbation,
       .data$gene_symbol,
@@ -767,13 +945,22 @@ powerup_process_observations_from_counts <- function(
   )))
   overlapping_perts <- intersect(observed_perts, predicted_perts)
 
-  observed_samples <- sort(unique(as.character(
-    target_tbl$sample[!is.na(target_tbl$sample)]
-  )))
-  predicted_samples <- sort(unique(as.character(
-    pred_tbl$cell_line[!is.na(pred_tbl$cell_line)]
-  )))
-  overlapping_samples <- intersect(observed_samples, predicted_samples)
+observed_samples <- sort(unique(as.character(
+  target_tbl$sample[!is.na(target_tbl$sample)]
+)))
+predicted_samples <- sort(unique(as.character(
+  pred_tbl$cell_line[!is.na(pred_tbl$cell_line)]
+)))
+
+observed_samples_clean <- sort(unique(.pu_obs_counts_clean_colname(observed_samples)))
+predicted_samples_clean <- sort(unique(.pu_obs_counts_clean_colname(predicted_samples)))
+
+observed_sample_bases <- sort(unique(.pu_obs_counts_base_sample(observed_samples)))
+predicted_sample_bases <- sort(unique(.pu_obs_counts_base_sample(predicted_samples)))
+
+overlapping_samples <- intersect(observed_samples_clean, predicted_samples_clean)
+overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_bases)
+
 
   matched_rows_only <- joined_tbl %>%
     filter(
@@ -839,9 +1026,12 @@ powerup_process_observations_from_counts <- function(
       includeUnexpressedCount = length(cfg$includeUnexpressed)
     ),
     sampleOverlap = list(
-      overlapping = head(overlapping_samples, 50),
-      observedOnly = head(setdiff(observed_samples, predicted_samples), 50),
-      predictedOnly = head(setdiff(predicted_samples, observed_samples), 50)
+      overlappingExact = head(overlapping_samples, 50),
+      overlappingBase = head(overlapping_sample_bases, 50),
+      observedOnlyExact = head(setdiff(observed_samples_clean, predicted_samples_clean), 50),
+      predictedOnlyExact = head(setdiff(predicted_samples_clean, observed_samples_clean), 50),
+      observedBasesOnly = head(setdiff(observed_sample_bases, predicted_sample_bases), 50),
+      predictedBasesOnly = head(setdiff(predicted_sample_bases, observed_sample_bases), 50)
     ),
     perturbationOverlap = list(
       overlapping = head(overlapping_perts, 50),
