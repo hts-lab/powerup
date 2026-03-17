@@ -581,7 +581,7 @@ powerup_process_observations_from_counts <- function(
     if (!is.na(config_path) && nzchar(trimws(config_path))) {
       .pu_assert_file_exists(config_path, "config_path")
     }
-  } 
+  }
 
 
   reference_sample <- trimws(as.character(reference_sample))[1]
