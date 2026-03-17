@@ -42,6 +42,40 @@ suppressPackageStartupMessages({
   raw_names[[hit_idx[[1]]]]
 }
 
+.pu_obs_counts_guess_delim <- function(path) {
+  .pu_assert_file_exists(path, "path")
+
+  first_line <- readLines(path, n = 1, warn = FALSE)
+  if (length(first_line) < 1) {
+    stop("[powerup][OBSERVATIONS_COUNTS] input file is empty")
+  }
+
+  line <- first_line[[1]]
+
+  n_tab <- lengths(regmatches(line, gregexpr("\t", line, fixed = TRUE)))
+  n_comma <- lengths(regmatches(line, gregexpr(",", line, fixed = TRUE)))
+  n_semicolon <- lengths(regmatches(line, gregexpr(";", line, fixed = TRUE)))
+
+  n_tab <- ifelse(length(n_tab) < 1 || is.na(n_tab), 0L, as.integer(n_tab[[1]]))
+  n_comma <- ifelse(length(n_comma) < 1 || is.na(n_comma), 0L, as.integer(n_comma[[1]]))
+  n_semicolon <- ifelse(length(n_semicolon) < 1 || is.na(n_semicolon), 0L, as.integer(n_semicolon[[1]]))
+
+  if (n_tab >= n_comma && n_tab >= n_semicolon && n_tab > 0) {
+    return("\t")
+  }
+  if (n_comma >= n_semicolon && n_comma > 0) {
+    return(",")
+  }
+  if (n_semicolon > 0) {
+    return(";")
+  }
+
+  stop(
+    "[powerup][OBSERVATIONS_COUNTS] could not determine delimiter from first line; ",
+    "expected tab, comma, or semicolon delimited text"
+  )
+}
+
 .pu_obs_counts_clean_colname <- function(x) {
   x <- as.character(x)
   x <- .pu_obs_make_clean_name(x)
@@ -57,21 +91,35 @@ suppressPackageStartupMessages({
   x
 }
 
-
 .pu_obs_counts_read_reference_required <- function(reference_path) {
   .pu_assert_file_exists(reference_path, "reference_path")
 
-  ref_tbl <- readr::read_tsv(
-    reference_path,
+  delim <- .pu_obs_counts_guess_delim(reference_path)
+
+  ref_tbl <- readr::read_delim(
+    file = reference_path,
+    delim = delim,
     show_col_types = FALSE,
-    progress = FALSE
+    progress = FALSE,
+    guess_max = 10000,
+    trim_ws = TRUE
   ) %>%
     tibble::as_tibble()
+
+  if (ncol(ref_tbl) < 2) {
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] guide reference parsed into only {ncol(ref_tbl)} column(s) ",
+      "using delimiter '{delim}'. Header may be malformed."
+    ))
+  }
 
   original_colnames <- colnames(ref_tbl)
   colnames(ref_tbl) <- .pu_obs_make_clean_name(colnames(ref_tbl))
   cleaned_colnames <- colnames(ref_tbl)
 
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] guide_reference delimiter='{delim}'"
+  ))
   message(glue(
     "[powerup][OBSERVATIONS_COUNTS] guide_reference original columns: {paste(original_colnames, collapse=', ')}"
   ))
@@ -144,25 +192,32 @@ suppressPackageStartupMessages({
 .pu_obs_counts_read_counts_required <- function(counts_path) {
   .pu_assert_file_exists(counts_path, "counts_path")
 
-  ext <- tolower(tools::file_ext(counts_path))
-  if (identical(ext, "tsv") || identical(ext, "txt")) {
-    counts_tbl <- readr::read_tsv(
-      counts_path,
-      show_col_types = FALSE,
-      progress = FALSE
-    ) %>% tibble::as_tibble()
-  } else {
-    counts_tbl <- readr::read_csv(
-      counts_path,
-      show_col_types = FALSE,
-      progress = FALSE
-    ) %>% tibble::as_tibble()
+  delim <- .pu_obs_counts_guess_delim(counts_path)
+
+  counts_tbl <- readr::read_delim(
+    file = counts_path,
+    delim = delim,
+    show_col_types = FALSE,
+    progress = FALSE,
+    guess_max = 10000,
+    trim_ws = TRUE
+  ) %>%
+    tibble::as_tibble()
+
+  if (ncol(counts_tbl) < 2) {
+    stop(glue(
+      "[powerup][OBSERVATIONS_COUNTS] raw counts file parsed into only {ncol(counts_tbl)} column(s) ",
+      "using delimiter '{delim}'. Header may be malformed."
+    ))
   }
 
   original_colnames <- colnames(counts_tbl)
   colnames(counts_tbl) <- .pu_obs_make_clean_name(colnames(counts_tbl))
   cleaned_colnames <- colnames(counts_tbl)
 
+  message(glue(
+    "[powerup][OBSERVATIONS_COUNTS] raw_counts delimiter='{delim}'"
+  ))
   message(glue(
     "[powerup][OBSERVATIONS_COUNTS] raw_counts original columns: {paste(original_colnames, collapse=', ')}"
   ))
