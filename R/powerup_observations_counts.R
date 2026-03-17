@@ -700,7 +700,14 @@ suppressPackageStartupMessages({
     ) %>%
     .pu_obs_counts_attach_reference(reference_tbl = new_reference_tbl) %>%
     .pu_obs_counts_calculate_target_lfcs(min_guides = min_guides) %>%
-    arrange(.data$sample)
+    arrange(.data$sample) %>%
+    mutate(
+      perturbation = as.character(.data$gene_symbol),
+      normalizedPerturbation = .pu_obs_normalize_perturbation(
+        .data$gene_symbol,
+        response_set = "crispr"
+      )
+    )
 
   neg_controls_effective <- unique(c(neg_controls, include_unexpressed))
 
@@ -716,6 +723,7 @@ suppressPackageStartupMessages({
 
   result
 }
+
 
 # -----------------------------
 # Exported raw-counts pipeline
@@ -964,14 +972,14 @@ powerup_process_observations_from_counts <- function(
       mutate(
         sample = .pu_obs_counts_clean_colname(.data$sample),
         sample_base = .pu_obs_counts_base_sample(.data$sample),
-        perturbation = as.character(.data$gene_symbol),
-        normalizedPerturbation = .pu_obs_normalize_perturbation(.data$gene_symbol, response_set = "crispr"),
+        perturbation = as.character(.data$perturbation),
+        normalizedPerturbation = as.character(.data$normalizedPerturbation),
         control = case_when(
           .data$positive_control ~ "positive",
           .data$negative_control ~ "negative",
           TRUE ~ NA_character_
         ),
-        category_input = as.character(.data$category),
+        category_input = NA_character_,
         primaryObservationType = "z_scored_avg_lfc",
         primaryObservationValue = suppressWarnings(as.numeric(.data$target_z))
       ) %>%
@@ -1035,22 +1043,6 @@ powerup_process_observations_from_counts <- function(
   message(glue(
     "[powerup][OBSERVATIONS_COUNTS] joined_tbl rows={nrow(joined_tbl)} cols={paste(colnames(joined_tbl), collapse=', ')}"
   ))
-
-  
-  # Add generative KDE likelihood model using target_z, same as current observations pipeline.
-  target_tbl <- .pu_obs_fit_kde_likelihood_by_sample(
-    target_tbl = target_tbl,
-    obs_col = "target_z",
-    bw = "nrd0",
-    adjust = 1,
-    density_floor = 1e-12
-  )
-
-  joined_tbl <- .pu_obs_build_joined_tbl(
-    target_tbl = target_tbl,
-    pred_tbl = pred_tbl,
-    response_set = response_set
-  )
 
   pred_norm_tbl <- pred_tbl %>%
     mutate(
@@ -1125,7 +1117,8 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       nObsLikelihoodRows = nObsLikelihoodRows,
       nObservedSamples = length(observed_samples),
       nPredictedSamples = length(predicted_samples),
-      nOverlappingSamples = length(overlapping_samples),
+      nOverlappingSamplesExact = length(overlapping_samples),
+      nOverlappingSamplesBase = length(overlapping_sample_bases),
       nObservedPerturbations = length(observed_perts),
       nPredictedPerturbations = length(predicted_perts),
       nOverlappingPerturbations = length(overlapping_perts)
