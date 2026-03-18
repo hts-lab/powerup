@@ -966,51 +966,56 @@ powerup_process_observations_from_counts <- function(
     "[powerup][OBSERVATIONS_COUNTS] target_tbl_pre_mutate rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
   ))
 
-  target_tbl <- .pu_obs_counts_step(
-    "decorate_target_tbl",
-    target_tbl %>%
-      mutate(
-        sample = .pu_obs_counts_clean_colname(.data$sample),
-        sample_base = .pu_obs_counts_base_sample(.data$sample),
-        perturbation = as.character(.data$perturbation),
-        normalizedPerturbation = as.character(.data$normalizedPerturbation),
-        control = case_when(
-          .data$positive_control ~ "positive",
-          .data$negative_control ~ "negative",
-          TRUE ~ NA_character_
-        ),
-        category_input = NA_character_,
-        primaryObservationType = "z_scored_avg_lfc",
-        primaryObservationValue = suppressWarnings(as.numeric(.data$target_z))
-      ) %>%
-      select(
-        .data$sample,
-        .data$sample_base,
-        .data$perturbation,
-        .data$normalizedPerturbation,
-        .data$gene_symbol,
-        .data$mean_target_lfc,
-        .data$target_z,
-        .data$target_z_pvalue,
-        .data$target_z_fdr,
-        .data$n_guides,
-        .data$control,
-        .data$category_input,
-        .data$primaryObservationType,
-        .data$primaryObservationValue,
-        .data$control_class,
-        .data$positive_control,
-        .data$negative_control,
-        .data$positive,
-        .data$neg_lfc_median,
-        .data$pos_lfc_median,
-        .data$scaled_target_lfc,
-        .data$positive_probability,
-        .data$positive_prediction,
-        .data$positive_probability_model_status,
-        .data$positive_probability_model_message
-      )
-  )
+target_tbl <- .pu_obs_counts_step(
+  "decorate_target_tbl",
+  target_tbl %>%
+    mutate(
+      sample = .pu_obs_counts_clean_colname(.data$sample),
+      sample_base = .pu_obs_counts_base_sample(.data$sample),
+      perturbation = as.character(.data$perturbation),
+      normalizedPerturbation = as.character(.data$normalizedPerturbation),
+      control = case_when(
+        .data$positive_control ~ "positive",
+        .data$negative_control ~ "negative",
+        TRUE ~ NA_character_
+      ),
+      category_input = NA_character_,
+      observationType = "z_scored_avg_lfc",
+      observationValue = suppressWarnings(as.numeric(.data$target_z)),
+      primaryObservationType = "z_scored_avg_lfc",
+      primaryObservationValue = suppressWarnings(as.numeric(.data$target_z))
+    ) %>%
+    select(
+      .data$sample,
+      .data$sample_base,
+      .data$perturbation,
+      .data$normalizedPerturbation,
+      .data$gene_symbol,
+      .data$mean_target_lfc,
+      .data$target_z,
+      .data$target_z_pvalue,
+      .data$target_z_fdr,
+      .data$n_guides,
+      .data$control,
+      .data$category_input,
+      .data$observationType,
+      .data$observationValue,
+      .data$primaryObservationType,
+      .data$primaryObservationValue,
+      .data$control_class,
+      .data$positive_control,
+      .data$negative_control,
+      .data$positive,
+      .data$neg_lfc_median,
+      .data$pos_lfc_median,
+      .data$scaled_target_lfc,
+      .data$positive_probability,
+      .data$positive_prediction,
+      .data$positive_probability_model_status,
+      .data$positive_probability_model_message
+    )
+)
+
 
   message(glue(
     "[powerup][OBSERVATIONS_COUNTS] target_tbl_post_mutate rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
