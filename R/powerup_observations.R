@@ -779,6 +779,206 @@ suppressPackageStartupMessages({
     )
   out[[length(out) + 1L]] <- prob_tbl
 
+  # obs_lik_essential rows
+  lik_ess_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_lik_essential)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_lik_essential",
+      observationValue = as.numeric(.data$obs_lik_essential),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- lik_ess_tbl
+
+  # obs_lik_nonessential rows
+  lik_non_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_lik_nonessential)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_lik_nonessential",
+      observationValue = as.numeric(.data$obs_lik_nonessential),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- lik_non_tbl
+
+  # obs_bayes_factor rows
+  bf_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_bayes_factor)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_bayes_factor",
+      observationValue = as.numeric(.data$obs_bayes_factor),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- bf_tbl
+
+  # obs_log_bayes_factor rows
+  log_bf_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_log_bayes_factor)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_log_bayes_factor",
+      observationValue = as.numeric(.data$obs_log_bayes_factor),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- log_bf_tbl
+
+  # obs_posterior_equal_prior rows
+  eq_prior_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_posterior_equal_prior)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_posterior_equal_prior",
+      observationValue = as.numeric(.data$obs_posterior_equal_prior),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- eq_prior_tbl
+  
   dplyr::bind_rows(out)
 }
 
