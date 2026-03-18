@@ -849,7 +849,20 @@ suppressPackageStartupMessages({
       prediction_sample_base = .data$sample_base
     )
 
-  joined_tbl <- bind_rows(exact_join_tbl, fallback_join_tbl)
+
+  joined_tbl <- bind_rows(exact_join_tbl, fallback_join_tbl) %>%
+    mutate(
+      sampleId = dplyr::coalesce(
+        .data$observation_sample,
+        .data$sample,
+        .data$sample_obs
+      ),
+      predictionSampleId = dplyr::coalesce(
+        .data$prediction_sample,
+        .data$sample,
+        .data$sample_pred
+      )
+    )
 
   required_after_join <- c(
     "perturbation_obs",
@@ -915,21 +928,39 @@ suppressPackageStartupMessages({
 
   matched_rows_only <- joined_tbl %>%
     filter(
-      !is.na(.data$sample),
       !is.na(.data$observationType),
       !is.na(.data$observationValue),
       !is.na(.data$prediction_value)
     )
 
-  samples <- matched_rows_only %>%
+  samples <- target_tbl %>%
+    filter(!is.na(.data$sample), nzchar(.data$sample)) %>%
     distinct(.data$sample) %>%
     arrange(.data$sample) %>%
-    transmute(sampleId = .data$sample)
+    transmute(sampleId = as.character(.data$sample))
 
-  observation_types <- matched_rows_only %>%
+  observation_types <- target_tbl %>%
+    {
+      if ("observationType" %in% colnames(.)) {
+        .
+      } else if ("primaryObservationType" %in% colnames(.)) {
+        mutate(., observationType = .data$primaryObservationType)
+      } else {
+        mutate(., observationType = NA_character_)
+      }
+    } %>%
+    filter(!is.na(.data$observationType), nzchar(.data$observationType)) %>%
     distinct(.data$observationType) %>%
     arrange(.data$observationType) %>%
     transmute(observationType = as.character(.data$observationType))
+
+  message(glue(
+    "[powerup][OBS_WRITE] samples n={nrow(samples)} values={paste(samples$sampleId, collapse=', ')}"
+  ))
+  message(glue(
+    "[powerup][OBS_WRITE] observation_types n={nrow(observation_types)} values={paste(observation_types$observationType, collapse=', ')}"
+  ))
+
 
   write_json_file <- function(path, obj) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -971,7 +1002,7 @@ suppressPackageStartupMessages({
       !is.na(.data$prediction_value)
     ) %>%
     arrange(
-      .data$sample,
+      .data$sampleId,
       .data$observationType,
       .data$perturbation_display
     )
@@ -981,13 +1012,13 @@ suppressPackageStartupMessages({
   scatter_preview <- list(
     schemaVersion = 3,
     generatedAt = as.character(Sys.time()),
-    previewSampleId = if (preview_n > 0) as.character(preview_candidates$sample[[1]]) else NULL,
+    previewSampleId = if (preview_n > 0) as.character(preview_candidates$sampleId[[1]]) else NULL,
     previewObservationType = if (preview_n > 0) as.character(preview_candidates$observationType[[1]]) else NULL,
     pointCount = preview_n,
     points = lapply(seq_len(preview_n), function(i) {
       row <- preview_candidates[i, , drop = FALSE]
       list(
-        sampleId = as.character(row$sample[[1]]),
+        sampleId = as.character(row$sampleId[[1]]),
         observationType = as.character(row$observationType[[1]]),
         perturbation = as.character(row$perturbation_display[[1]]),
         modelKey = as.character(row$modelKey[[1]]),
