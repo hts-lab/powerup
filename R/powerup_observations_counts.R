@@ -1214,6 +1214,8 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
     )
   )
 
+  # In counts mode, target_tbl already includes positive_probability and related
+  # columns, so we intentionally reuse target_tbl for the positiveProbability artifact.
   .pu_obs_write_outputs(
     target_tbl = target_tbl,
     positive_tbl = target_tbl,

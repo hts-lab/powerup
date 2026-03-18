@@ -939,16 +939,9 @@ suppressPackageStartupMessages({
     arrange(.data$sample) %>%
     transmute(sampleId = as.character(.data$sample))
 
-  observation_types <- target_tbl %>%
-    {
-      if ("observationType" %in% colnames(.)) {
-        .
-      } else if ("primaryObservationType" %in% colnames(.)) {
-        mutate(., observationType = .data$primaryObservationType)
-      } else {
-        mutate(., observationType = NA_character_)
-      }
-    } %>%
+  obs_long_for_schema <- .pu_obs_build_observation_long_tbl(target_tbl)
+
+  observation_types <- obs_long_for_schema %>%
     filter(!is.na(.data$observationType), nzchar(.data$observationType)) %>%
     distinct(.data$observationType) %>%
     arrange(.data$observationType) %>%
