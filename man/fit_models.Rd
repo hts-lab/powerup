@@ -9,6 +9,7 @@ fit_models(
   model_dataset,
   splits = 10,
   chunk_size = 6,
+  perturbation_tags = "ko_",
   response_cutoff = 0.5,
   decreasing = FALSE,
   weight_cap = 0,

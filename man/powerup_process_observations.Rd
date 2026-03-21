@@ -15,7 +15,8 @@ powerup_process_observations(
   observation_run_id,
   response_set,
   data_version,
-  seed = 1L
+  seed = 1L,
+  perturbation_tags = "ko_"
 )
 }
 \description{

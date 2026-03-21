@@ -17,13 +17,14 @@ make_xgb_model(
   nrounds = 100,
   max_depth = 3,
   f_subsample = 1,
-  min_score = 0.01,
+  min_score = 0.05,
   skip_eval = FALSE,
   shuffle = FALSE,
   n_threads = 4,
   xgb_params = NULL,
   cor_data = NULL,
   cor_n_features = 1000,
+  perturbation_tags = "ko_",
   use_gpu = TRUE,
   gpu_id = 0
 )

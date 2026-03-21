@@ -7,6 +7,7 @@
 fit_depmap_models(
   depmap_data,
   models_to_make,
+  perturbation_tags = "ko_",
   response_cutoff = 0.5,
   decreasing = FALSE,
   weight_cap = 0,

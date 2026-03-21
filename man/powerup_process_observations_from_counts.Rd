@@ -19,7 +19,8 @@ powerup_process_observations_from_counts(
   positive_controls_path = NULL,
   negative_controls_path = NULL,
   config_path = NULL,
-  seed = 1L
+  seed = 1L,
+  perturbation_tags = "ko_"
 )
 }
 \description{

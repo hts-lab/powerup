@@ -8,6 +8,7 @@ fit_models_in_parallel(
   perturbs,
   chunk_size = 20,
   model_dataset,
+  perturbation_tags = "ko_",
   response_cutoff = 0.5,
   decreasing = FALSE,
   weight_cap = 0,

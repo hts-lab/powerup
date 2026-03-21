@@ -8,6 +8,7 @@ fit_models_and_save(
   perturbs,
   chunk_indx,
   model_dataset,
+  perturbation_tags = "ko_",
   response_cutoff = 0.5,
   decreasing = FALSE,
   weight_cap = 0,
