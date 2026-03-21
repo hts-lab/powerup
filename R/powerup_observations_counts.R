@@ -683,7 +683,8 @@ suppressPackageStartupMessages({
   neg_controls,
   include_unexpressed = character(0),
   sd_cutoff = NA_real_,
-  min_guides = 2L
+  min_guides = 2L,
+  perturbation_tags = "ko_"
 ) {
   if (is.finite(sd_cutoff)) {
     lfcs_collapsed_filtered <- lfcs_collapsed %>%
@@ -705,7 +706,8 @@ suppressPackageStartupMessages({
       perturbation = as.character(.data$gene_symbol),
       normalizedPerturbation = .pu_obs_normalize_perturbation(
         .data$gene_symbol,
-        response_set = "crispr"
+        response_set = "crispr",
+        perturbation_tags = perturbation_tags
       )
     )
 
@@ -714,12 +716,21 @@ suppressPackageStartupMessages({
   result <- result %>%
     .pu_obs_add_control_annotations(
       controls = list(
-        positive = .pu_obs_normalize_perturbation(pos_controls, response_set = "crispr"),
-        negative = .pu_obs_normalize_perturbation(neg_controls_effective, response_set = "crispr")
+        positive = .pu_obs_normalize_perturbation(
+          pos_controls,
+          response_set = "crispr",
+          perturbation_tags = perturbation_tags
+        ),
+        negative = .pu_obs_normalize_perturbation(
+          neg_controls_effective,
+          response_set = "crispr",
+          perturbation_tags = perturbation_tags
+        )
       )
     ) %>%
     .pu_obs_add_scaled_target_lfc() %>%
     .pu_obs_fit_positive_probability()
+    
 
   result
 }
@@ -752,7 +763,8 @@ powerup_process_observations_from_counts <- function(
   positive_controls_path = NULL,
   negative_controls_path = NULL,
   config_path = NULL,
-  seed = 1L
+  seed = 1L,
+  perturbation_tags = "ko_"
 ) {
   if (!identical(tolower(response_set), "crispr")) {
     stop("[powerup][OBSERVATIONS_COUNTS] raw-counts observations mode currently supports response_set='crispr' only")
@@ -958,7 +970,8 @@ powerup_process_observations_from_counts <- function(
       neg_controls = neg_controls,
       include_unexpressed = cfg$includeUnexpressed,
       sd_cutoff = cfg$sdCutoff,
-      min_guides = cfg$minGuides
+      min_guides = cfg$minGuides,
+      perturbation_tags = perturbation_tags
     )
   )
 
@@ -1041,7 +1054,8 @@ target_tbl <- .pu_obs_counts_step(
     .pu_obs_build_joined_tbl(
       target_tbl = target_tbl,
       pred_tbl = pred_tbl,
-      response_set = response_set
+      response_set = response_set,
+      perturbation_tags = perturbation_tags
     )
   )
 
@@ -1053,7 +1067,8 @@ target_tbl <- .pu_obs_counts_step(
     mutate(
       normalizedPerturbationObsJoin = .pu_obs_normalize_perturbation(
         .data$perturbation,
-        response_set = response_set
+        response_set = response_set,
+        perturbation_tags = perturbation_tags
       )
     )
 

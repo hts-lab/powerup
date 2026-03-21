@@ -93,25 +93,6 @@ suppressPackageStartupMessages({
   NA_real_
 }
 
-.pu_obs_strip_known_prefix <- function(x, tags = "ko_") {
-  if (length(x) == 0) return(character(0))
-
-  out <- as.character(x)
-  tags <- as.character(tags)
-  tags <- trimws(tags)
-  tags <- unique(tags[nzchar(tags)])
-
-  if (length(tags) < 1) {
-    tags <- "ko_"
-  }
-
-  for (tag in tags) {
-    pattern <- paste0("^", gsub("([][{}()+*^$|\\\\.?-])", "\\\\\\1", tag), collapse = "")
-    out <- gsub(pattern, "", out, perl = TRUE, ignore.case = TRUE)
-  }
-
-  out
-}
 
 .pu_obs_strip_known_prefix <- function(x, tags = "ko_") {
   if (length(x) == 0) return(character(0))
@@ -263,7 +244,7 @@ suppressPackageStartupMessages({
 
 }
 
-.pu_obs_extract_target_level <- function(obs_long, response_set) {
+.pu_obs_extract_target_level <- function(obs_long, response_set, perturbation_tags = "ko_") {
   if (!all(c(
     "sample",
     "perturbation",
@@ -288,7 +269,8 @@ suppressPackageStartupMessages({
       # parsing may have used different normalization semantics.
       normalizedPerturbation = .pu_obs_normalize_perturbation(
         .data$perturbation,
-        response_set = response_set
+        response_set = response_set,
+        perturbation_tags = perturbation_tags
       ),
 
       observationType = as.character(.data$observationType),
@@ -422,7 +404,8 @@ suppressPackageStartupMessages({
   target_tbl,
   response_set,
   positive_controls_path = NULL,
-  negative_controls_path = NULL
+  negative_controls_path = NULL,
+  perturbation_tags = "ko_"
 ) {
   file_pos_raw <- .pu_obs_read_control_file(positive_controls_path)
   file_neg_raw <- .pu_obs_read_control_file(negative_controls_path)
@@ -430,11 +413,27 @@ suppressPackageStartupMessages({
   pkg <- .pu_obs_load_packaged_controls()
   meta <- .pu_obs_load_metadata_controls(target_tbl)
 
-  file_pos <- .pu_obs_normalize_perturbation(file_pos_raw, response_set)
-  file_neg <- .pu_obs_normalize_perturbation(file_neg_raw, response_set)
+  file_pos <- .pu_obs_normalize_perturbation(
+    file_pos_raw,
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
+  )
+  file_neg <- .pu_obs_normalize_perturbation(
+    file_neg_raw,
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
+  )
 
-  pkg_pos <- .pu_obs_normalize_perturbation(pkg$positive, response_set)
-  pkg_neg <- .pu_obs_normalize_perturbation(pkg$negative, response_set)
+  pkg_pos <- .pu_obs_normalize_perturbation(
+    pkg$positive,
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
+  )
+  pkg_neg <- .pu_obs_normalize_perturbation(
+    pkg$negative,
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
+  )
 
   pos <- unique(c(file_pos, pkg_pos, meta$positive))
   neg <- unique(c(file_neg, pkg_neg, meta$negative))
@@ -1029,7 +1028,8 @@ suppressPackageStartupMessages({
 }
 
 
-.pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set) {
+.pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set, perturbation_tags = "ko_") {
+
   obs_long_tbl <- .pu_obs_build_observation_long_tbl(target_tbl) %>%
     mutate(
       sample = .pu_obs_counts_clean_colname(as.character(.data$sample)),
@@ -1040,19 +1040,21 @@ suppressPackageStartupMessages({
       },
       normalizedPerturbation = .pu_obs_normalize_perturbation(
         .data$normalizedPerturbation,
-        response_set = response_set
+        response_set = response_set,
+        perturbation_tags = perturbation_tags
       )
     )
 
-  pred_prepped_tbl <- pred_tbl %>%
-    mutate(
-      sample = .pu_obs_counts_clean_colname(as.character(.data$cell_line)),
-      sample_base = .pu_obs_counts_base_sample(as.character(.data$cell_line)),
-      normalizedPerturbation = .pu_obs_normalize_perturbation(
-        .data$perturbation,
-        response_set = response_set
+    pred_prepped_tbl <- pred_tbl %>%
+      mutate(
+        sample = .pu_obs_counts_clean_colname(as.character(.data$cell_line)),
+        sample_base = .pu_obs_counts_base_sample(as.character(.data$cell_line)),
+        normalizedPerturbation = .pu_obs_normalize_perturbation(
+          .data$perturbation,
+          response_set = response_set,
+          perturbation_tags = perturbation_tags
+        )
       )
-    )
 
   exact_join_tbl <- pred_prepped_tbl %>%
     inner_join(
@@ -1310,7 +1312,8 @@ powerup_process_observations <- function(
   observation_run_id,
   response_set,
   data_version,
-  seed = 1L
+  seed = 1L,
+  perturbation_tags = "ko_"
 ) {
   powerup_dir_create(out_observations_dir)
 
@@ -1339,12 +1342,18 @@ powerup_process_observations <- function(
   schema_obj <- .pu_obs_read_json_file(schema_path)
   pred_tbl <- .pu_obs_load_predictions_required(predictions_path)
 
-  target_tbl <- .pu_obs_extract_target_level(obs_long, response_set = response_set)
+  target_tbl <- .pu_obs_extract_target_level(
+    obs_long,
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
+  )
+
   controls <- .pu_obs_resolve_controls(
     target_tbl = target_tbl,
     response_set = response_set,
     positive_controls_path = positive_controls_path,
-    negative_controls_path = negative_controls_path
+    negative_controls_path = negative_controls_path,
+    perturbation_tags = perturbation_tags
   )
 
   message(glue(
@@ -1392,14 +1401,16 @@ powerup_process_observations <- function(
   joined_tbl <- .pu_obs_build_joined_tbl(
     target_tbl = positive_tbl,
     pred_tbl = pred_tbl,
-    response_set = response_set
+    response_set = response_set,
+    perturbation_tags = perturbation_tags
   )
 
   pred_norm_tbl <- pred_tbl %>%
     mutate(
       normalizedPerturbationObsJoin = .pu_obs_normalize_perturbation(
         .data$perturbation,
-        response_set = response_set
+        response_set = response_set,
+        perturbation_tags = perturbation_tags
       )
     )
 
