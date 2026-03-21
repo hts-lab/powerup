@@ -115,7 +115,7 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   # -----------------------------
   # start
   # -----------------------------
-  cat(glue::glue("[{lubridate::now('US/Eastern')}] Making predictions for {name} ({indx} of {total}) .."), sep = "\n")
+  cat(glue::glue("[{lubridate::now('America/New_York')}] Making predictions for {name} ({indx} of {total}) .."), sep = "\n")
   flush.console()
 
   if (!is.data.frame(new_data)) new_data <- as.data.frame(new_data, check.names = FALSE)
