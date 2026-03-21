@@ -128,19 +128,29 @@ powerup_write_json <- function(path, obj) {
   ids
 }
 
-.pu_canonicalize_perturbation_id <- function(x, strip_ko_prefix = FALSE) {
+.pu_canonicalize_perturbation_id <- function(x, perturbation_tags = NULL) {
   x <- trimws(as.character(x))
   x <- tolower(x)
-  if (strip_ko_prefix) {
-    x <- sub("^ko_", "", x, ignore.case = TRUE)
+
+  tags <- as.character(perturbation_tags %||% character(0))
+  tags <- trimws(tags)
+  tags <- unique(tags[nzchar(tags)])
+
+  if (length(tags) > 0) {
+    for (tag in tags) {
+      pattern <- paste0("^", gsub("([][{}()+*^$|\\\\.?-])", "\\\\\\1", tag))
+      x <- sub(pattern, "", x, ignore.case = TRUE, perl = TRUE)
+    }
   }
+
   x
 }
+
 
 .pu_resolve_targets_against_perturbations <- function(
   targets,
   perturbations,
-  strip_ko_prefix = FALSE,
+  perturbation_tags = NULL,
   job_id = NA_character_
 ) {
   if (is.null(targets) || length(targets) < 1) {
@@ -161,7 +171,7 @@ powerup_write_json <- function(path, obj) {
       perturbations,
       .pu_canonicalize_perturbation_id,
       character(1),
-      strip_ko_prefix = strip_ko_prefix
+      perturbation_tags = perturbation_tags
     )
   )
 
@@ -183,7 +193,7 @@ powerup_write_json <- function(path, obj) {
       targets,
       .pu_canonicalize_perturbation_id,
       character(1),
-      strip_ko_prefix = strip_ko_prefix
+      perturbation_tags = perturbation_tags
     )
   ) %>%
     dplyr::group_by(.data$canonical) %>%
@@ -495,7 +505,8 @@ powerup_preprocess <- function(
   targets = NULL,
   selected_samples_path = NULL,
   sensitive_cutoff = 0.75,
-  resistant_cutoff = 0.25
+  resistant_cutoff = 0.25,
+  perturbation_tags = "ko_"
 ) {
   powerup_dir_create(out_preprocess_dir)
 
@@ -568,7 +579,7 @@ powerup_preprocess <- function(
       targets_resolved <- .pu_resolve_targets_against_perturbations(
         targets = targets,
         perturbations = perturbations,
-        strip_ko_prefix = identical(tolower(response_set), "crispr"),
+        perturbation_tags = if (identical(tolower(response_set), "crispr")) perturbation_tags else NULL,
         job_id = job_id
       )
 
@@ -584,7 +595,7 @@ powerup_preprocess <- function(
       message(glue(
         "[powerup][jobId={job_id}] targets explicit allowlist resolved: ",
         "requested={n_requested} matched={n_matched} ignored={n_ignored} ",
-        "stripKoPrefix={identical(tolower(response_set), 'crispr')}"
+        "perturbationTags={paste(if (identical(tolower(response_set), 'crispr')) perturbation_tags else character(0), collapse='|')}"
       ))
 
     }
@@ -768,6 +779,7 @@ powerup_train_models <- function(
   xgb_params = NULL,
   cor_data = NULL,
   cor_n_features = 1000,
+  perturbation_tags = "ko_",
   use_gpu = FALSE,
   gpu_id = 0
 ) {
@@ -954,6 +966,7 @@ powerup_train_models <- function(
       # ---- Train Model ----
       fit <- make_xgb_model(
         perturbation = perturbation,
+        perturbation_tags = perturbation_tags,
         indx = i,
         total = total,
         dataset = train_df,

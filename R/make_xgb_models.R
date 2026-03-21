@@ -22,20 +22,21 @@
 #' @export
 #' @examples
 #' make_xgb_model("ko_ctnnb1",1,1,my_data)
-make_xgb_model <- function(perturbation, indx, total, dataset, 
+make_xgb_model <- function(perturbation, indx, total, dataset,
                             response_cutoff = 0.75, decreasing = F,
                             weight_cap = 0.05,
-                            nfolds = 3, 
-                            nrepeats = 3, 
-                            nrounds = 100, 
+                            nfolds = 3,
+                            nrepeats = 3,
+                            nrounds = 100,
                             max_depth = 3,
                             f_subsample = 1,
-                            min_score = 0.01, 
+                            min_score = 0.05,
                             skip_eval = FALSE,
                             shuffle = FALSE,
                             n_threads = 4,
                             xgb_params = NULL,
                             cor_data = NULL, cor_n_features = 1000,
+                            perturbation_tags = "ko_",
                             use_gpu = TRUE, gpu_id = 0){
 
   cat(glue::glue("[{lubridate::now('America/New_York')}] Training a model for {perturbation} ({indx} of {total}) .."))
@@ -47,41 +48,78 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   normal_z_95 <- 1.959963984540054
 
   # This keeps one column of dependency scores (renamed 'y_value') plus all predictors
-  prepare_model_data <- function(perturbation, data, tag = "ko_", response_cutoff = 0.75, nfolds = 3, nrepeats = 3, cor_data = NULL, cor_num = 1000){
+  prepare_model_data <- function(
+    perturbation,
+    data,
+    perturbation_tags = "ko_",
+    response_cutoff = 0.75,
+    nfolds = 3,
+    nrepeats = 3,
+    cor_data = NULL,
+    cor_num = 1000
+  ) {
+
+    if (!(perturbation %in% colnames(data))) {
+      stop(glue::glue("Perturbation column '{perturbation}' not found in dataset"))
+    }
+
+    tags <- as.character(perturbation_tags %||% "ko_")
+    tags <- trimws(tags)
+    tags <- unique(tags[nzchar(tags)])
+
+    if (length(tags) < 1) {
+      tags <- "ko_"
+    }
+
+    escape_regex <- function(x) {
+      gsub("([][{}()+*^$|\\\\.?-])", "\\\\\\1", x)
+    }
+
+    prefix_pattern <- paste0("^(", paste(vapply(tags, escape_regex, character(1)), collapse = "|"), ")")
+
+    drop_prefixed_cols <- function(df) {
+      out <- df %>% dplyr::select(-dplyr::any_of(perturbation))
+      prefixed_cols <- grep(prefix_pattern, colnames(out), value = TRUE, perl = TRUE)
+      if (length(prefixed_cols) > 0) {
+        out <- out %>% dplyr::select(-dplyr::any_of(prefixed_cols))
+      }
+      out
+    }
 
     if (is.null(cor_data)) {
 
       prepared_data <- data %>%
-        dplyr::mutate(y_value = get(perturbation)) %>% 
-        dplyr::select(-dplyr::starts_with(tag)) %>%
-        stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
+        dplyr::mutate(y_value = .data[[perturbation]]) %>%
+        drop_prefixed_cols() %>%
+        stats::na.omit() %>%
+        tibble::as_tibble(rownames = "cell_line")
 
     } else {
 
       correlated_features <- NULL
 
-      if (perturbation %in% colnames(cor_data)){
-
+      if (perturbation %in% colnames(cor_data)) {
         correlated_features <- cor_data %>%
-          dplyr::top_n(cor_num, abs(get(perturbation))) %>%
+          dplyr::top_n(cor_num, abs(.data[[perturbation]])) %>%
           dplyr::pull(feature)
-
       }
 
-      if (!is.null(correlated_features) & length(correlated_features) > 0) {
+      if (!is.null(correlated_features) && length(correlated_features) > 0) {
 
         prepared_data <- data %>%
-          dplyr::mutate(y_value = get(perturbation)) %>% 
-          dplyr::select(-dplyr::starts_with(tag)) %>%
-          dplyr::select(y_value, dplyr::any_of(correlated_features))  %>%
-          stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
+          dplyr::mutate(y_value = .data[[perturbation]]) %>%
+          drop_prefixed_cols() %>%
+          dplyr::select(y_value, dplyr::any_of(correlated_features)) %>%
+          stats::na.omit() %>%
+          tibble::as_tibble(rownames = "cell_line")
 
       } else {
 
         prepared_data <- data %>%
-          dplyr::mutate(y_value = get(perturbation)) %>% 
-          dplyr::select(-dplyr::starts_with(tag)) %>%
-          stats::na.omit() %>% tibble::as_tibble(rownames = "cell_line") 
+          dplyr::mutate(y_value = .data[[perturbation]]) %>%
+          drop_prefixed_cols() %>%
+          stats::na.omit() %>%
+          tibble::as_tibble(rownames = "cell_line")
 
       }
     }
@@ -90,7 +128,14 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       tibble::column_to_rownames("cell_line") %>%
       dplyr::mutate(response = y_value > response_cutoff)
 
-    data_folds <- rsample::vfold_cv(prepared_data, v = nfolds, strata = y_value, repeats = nrepeats, breaks = 20, pool = 0.05)
+    data_folds <- rsample::vfold_cv(
+      prepared_data,
+      v = nfolds,
+      strata = y_value,
+      repeats = nrepeats,
+      breaks = 20,
+      pool = 0.05
+    )
 
     output <- list()
     output$original_data <- prepared_data
@@ -98,6 +143,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
     return(output)
   }
+
 
   # This creates an object that stores model parameters
   prepare_model_params <- function(data, xgb_params){
@@ -373,6 +419,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   model_data <- prepare_model_data(
     perturbation = perturbation,
     data = dataset,
+    perturbation_tags = perturbation_tags,
     response_cutoff = response_cutoff,
     nfolds = nfolds,
     nrepeats = nrepeats,
@@ -689,6 +736,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 #' @examples
 #' fit_depmap_models(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_depmap_models <- function(depmap_data, models_to_make,
+                              perturbation_tags = "ko_",
                               response_cutoff = 0.5, decreasing = FALSE,
                               weight_cap = 0,
                               nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.01,
@@ -704,6 +752,7 @@ fit_depmap_models <- function(depmap_data, models_to_make,
     models_to_make, seq_along(models_to_make), make_xgb_model,  
     total = length(models_to_make),
     dataset = depmap_data,
+    perturbation_tags = perturbation_tags,
     response_cutoff = response_cutoff, decreasing = decreasing,
     weight_cap = weight_cap,
     nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, min_score = min_score,
@@ -746,7 +795,9 @@ fit_depmap_models <- function(depmap_data, models_to_make,
 #' @examples
 #' fit_models_and_save(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_models_and_save <- function(perturbs, chunk_indx, 
-                                model_dataset, response_cutoff = 0.5, decreasing = FALSE,
+                                model_dataset, 
+                                perturbation_tags = "ko_",
+                                response_cutoff = 0.5, decreasing = FALSE,
                                 weight_cap = 0,
                                 nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.01,
                                 max_depth = 3,
@@ -771,6 +822,7 @@ fit_models_and_save <- function(perturbs, chunk_indx,
     
     my_models <- fit_depmap_models(depmap_data = model_dataset, 
                                    models_to_make = perturbs, 
+                                   perturbation_tags = perturbation_tags,
                                    response_cutoff = response_cutoff, decreasing = decreasing,
                                    weight_cap = weight_cap,
                                    nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds,
@@ -830,7 +882,9 @@ fit_models_and_save <- function(perturbs, chunk_indx,
 #' @examples
 #' fit_models_in_parallel(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_models_in_parallel <- function(perturbs, chunk_size = 20, 
-                                   model_dataset, response_cutoff = 0.5, decreasing = FALSE,
+                                   model_dataset, 
+                                   perturbation_tags = "ko_",
+                                   response_cutoff = 0.5, decreasing = FALSE,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.01,
                                    max_depth = 3,
@@ -850,7 +904,9 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
   inputs$gpu_id <- rep(gpu_id,length.out=length(perturb_splits))
   
   furrr::future_pmap(inputs,fit_models_and_save,
-                     model_dataset = model_dataset, response_cutoff = response_cutoff, decreasing = decreasing,
+                     model_dataset = model_dataset, 
+                     perturbation_tags = perturbation_tags,                     
+                     response_cutoff = response_cutoff, decreasing = decreasing,
                      weight_cap = weight_cap,
                      nfolds = nfolds, nrepeats = nrepeats, nrounds = nrounds, 
                      min_score = min_score,
@@ -895,6 +951,7 @@ fit_models_in_parallel <- function(perturbs, chunk_size = 20,
 #' fit_models(my_data, c("ko_ctnnb1","ko_myod1"))
 fit_models <- function(perturbs, model_dataset, splits = 10,
                        chunk_size = 6, 
+                                   perturbation_tags = "ko_",   
                                    response_cutoff = 0.5, decreasing = FALSE,
                                    weight_cap = 0,
                                    nfolds = 3, nrepeats = 1, nrounds = 200, min_score = 0.01,
@@ -930,6 +987,7 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
     show_msg("[{lubridate::now('America/New_York')}] Processing {big_chunk_count} of {splits} - STARTED")
     future::plan(multisession, workers = 8)
     fit_models_in_parallel(perturbs = this_big_chunk, 
+                           perturbation_tags = perturbation_tags,
                            chunk_size = chunk_size,
                            min_score = min_score,
                            max_depth = max_depth,

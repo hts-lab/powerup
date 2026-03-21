@@ -93,16 +93,62 @@ suppressPackageStartupMessages({
   NA_real_
 }
 
-.pu_obs_normalize_perturbation <- function(x, response_set) {
+.pu_obs_strip_known_prefix <- function(x, tags = "ko_") {
+  if (length(x) == 0) return(character(0))
+
+  out <- as.character(x)
+  tags <- as.character(tags)
+  tags <- trimws(tags)
+  tags <- unique(tags[nzchar(tags)])
+
+  if (length(tags) < 1) {
+    tags <- "ko_"
+  }
+
+  for (tag in tags) {
+    pattern <- paste0("^", gsub("([][{}()+*^$|\\\\.?-])", "\\\\\\1", tag), collapse = "")
+    out <- gsub(pattern, "", out, perl = TRUE, ignore.case = TRUE)
+  }
+
+  out
+}
+
+.pu_obs_strip_known_prefix <- function(x, tags = "ko_") {
+  if (length(x) == 0) return(character(0))
+
+  out <- as.character(x)
+  tags <- as.character(tags)
+  tags <- trimws(tags)
+  tags <- unique(tags[nzchar(tags)])
+
+  if (length(tags) < 1) {
+    tags <- "ko_"
+  }
+
+  for (tag in tags) {
+    pattern <- paste0("^", gsub("([][{}()+*^$|\\\\.?-])", "\\\\\\1", tag), collapse = "")
+    out <- gsub(pattern, "", out, perl = TRUE, ignore.case = TRUE)
+  }
+
+  out
+}
+
+.pu_obs_normalize_perturbation <- function(x, response_set, perturbation_tags = "ko_") {
   if (length(x) == 0) return(character(0))
 
   cleaned <- .pu_obs_make_clean_name(x)
 
   if (identical(tolower(response_set), "crispr")) {
-    # Convert gene symbols → model perturbation ids
-    # Example: CTNNB1 -> ctnnb1 -> ko_ctnnb1
-    cleaned <- sub("^ko_", "", cleaned, perl = TRUE)
-    return(ifelse(nzchar(cleaned), paste0("ko_", cleaned), cleaned))
+    tags <- as.character(perturbation_tags)
+    tags <- trimws(tags)
+    tags <- unique(tags[nzchar(tags)])
+    if (length(tags) < 1) {
+      tags <- "ko_"
+    }
+
+    canonical_tag <- tags[[1]]
+    cleaned <- .pu_obs_strip_known_prefix(cleaned, tags = tags)
+    return(ifelse(nzchar(cleaned), paste0(canonical_tag, cleaned), cleaned))
   }
 
   cleaned
@@ -978,7 +1024,7 @@ suppressPackageStartupMessages({
       obs_kde_adjust = .data$obs_kde_adjust
     )
   out[[length(out) + 1L]] <- eq_prior_tbl
-  
+
   dplyr::bind_rows(out)
 }
 
