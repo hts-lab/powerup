@@ -128,6 +128,111 @@ powerup_write_json <- function(path, obj) {
   ids
 }
 
+.pu_normalize_match_key <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  x <- trimws(x)
+  x <- tolower(x)
+  x <- gsub("[^a-z0-9]+", "", x, perl = TRUE)
+  x
+}
+
+.pu_read_perturbation_metadata <- function(
+  path = NULL,
+  perturbations,
+  perturbation_tags = NULL,
+  job_id = NA_character_
+) {
+  if (is.null(path) || !is.character(path) || length(path) != 1) {
+    return(NULL)
+  }
+
+  path <- trimws(path)
+  if (!nzchar(path) || !file.exists(path)) {
+    return(NULL)
+  }
+
+  tbl <- readr::read_csv(path, show_col_types = FALSE, progress = FALSE)
+
+  required_cols <- c("column_name", "name")
+  missing_cols <- setdiff(required_cols, names(tbl))
+  if (length(missing_cols) > 0) {
+    stop(glue(
+      "[powerup][jobId={job_id}] perturbation metadata file is missing required columns: ",
+      "{paste(missing_cols, collapse=', ')}"
+    ))
+  }
+
+  tbl <- tbl %>%
+    dplyr::mutate(
+      column_name = as.character(.data$column_name),
+      name = as.character(.data$name)
+    )
+
+  if (any(is.na(tbl$column_name) | trimws(tbl$column_name) == "")) {
+    stop(glue("[powerup][jobId={job_id}] perturbation metadata contains empty column_name values"))
+  }
+
+  dup_column_name <- tbl %>%
+    dplyr::count(.data$column_name, name = "n") %>%
+    dplyr::filter(.data$n > 1)
+
+  if (nrow(dup_column_name) > 0) {
+    stop(glue(
+      "[powerup][jobId={job_id}] perturbation metadata column_name must be unique; duplicates include: ",
+      "{paste(head(dup_column_name$column_name, 25), collapse=', ')}",
+      ifelse(nrow(dup_column_name) > 25, " ...", "")
+    ))
+  }
+
+  tbl <- tbl %>%
+    dplyr::filter(.data$column_name %in% perturbations)
+
+  if (nrow(tbl) < 1) {
+    message(glue(
+      "[powerup][jobId={job_id}] perturbation metadata file present but no rows matched dataset perturbations"
+    ))
+    return(NULL)
+  }
+
+  tbl <- tbl %>%
+    dplyr::mutate(
+      name = dplyr::if_else(is.na(.data$name), "", .data$name),
+      nameMatchKey = .pu_normalize_match_key(.data$name),
+      columnCanonical = vapply(
+        .data$column_name,
+        .pu_canonicalize_perturbation_id,
+        character(1),
+        perturbation_tags = perturbation_tags
+      )
+    )
+
+  dup_name_keys <- tbl %>%
+    dplyr::filter(nzchar(.data$nameMatchKey)) %>%
+    dplyr::count(.data$nameMatchKey, name = "n") %>%
+    dplyr::filter(.data$n > 1)
+
+  if (nrow(dup_name_keys) > 0) {
+    offending <- tbl %>%
+      dplyr::filter(.data$nameMatchKey %in% dup_name_keys$nameMatchKey) %>%
+      dplyr::arrange(.data$nameMatchKey, .data$column_name)
+
+    stop(glue(
+      "[powerup][jobId={job_id}] perturbation metadata normalized name values must be unique; duplicates include: ",
+      "{paste(head(unique(offending$nameMatchKey), 25), collapse=', ')}",
+      ifelse(length(unique(offending$nameMatchKey)) > 25, " ...", "")
+    ))
+  }
+
+  message(glue(
+    "[powerup][jobId={job_id}] perturbation metadata loaded rows={nrow(tbl)} ",
+    "matchedDatasetPerturbations={length(unique(tbl$column_name))}"
+  ))
+
+  tbl
+}
+
+
 .pu_canonicalize_perturbation_id <- function(x, perturbation_tags = NULL) {
   x <- trimws(as.character(x))
   x <- tolower(x)
@@ -150,6 +255,7 @@ powerup_write_json <- function(path, obj) {
 .pu_resolve_targets_against_perturbations <- function(
   targets,
   perturbations,
+  metadata_tbl = NULL,
   perturbation_tags = NULL,
   job_id = NA_character_
 ) {
@@ -189,42 +295,92 @@ powerup_write_json <- function(path, obj) {
   wanted_tbl <- tibble::tibble(
     requested = targets,
     requestedOrder = seq_along(targets),
-    canonical = vapply(
+    requestedTrimmed = trimws(as.character(targets)),
+    requestedCanonical = vapply(
       targets,
       .pu_canonicalize_perturbation_id,
       character(1),
       perturbation_tags = perturbation_tags
+    ),
+    requestedNameMatchKey = .pu_normalize_match_key(targets)
+  )
+
+  resolved_rows <- vector("list", nrow(wanted_tbl))
+
+  metadata_name_matches <- 0L
+  canonical_fallback_matches <- 0L
+
+  for (i in seq_len(nrow(wanted_tbl))) {
+    requested <- wanted_tbl$requested[[i]]
+    requested_order <- wanted_tbl$requestedOrder[[i]]
+    requested_canonical <- wanted_tbl$requestedCanonical[[i]]
+    requested_name_key <- wanted_tbl$requestedNameMatchKey[[i]]
+
+    resolved_perturbation <- NA_character_
+    resolution_method <- NA_character_
+
+    if (!is.null(metadata_tbl) && nrow(metadata_tbl) > 0 && nzchar(requested_name_key)) {
+      hit <- metadata_tbl %>%
+        dplyr::filter(.data$nameMatchKey == requested_name_key) %>%
+        dplyr::slice_head(n = 1)
+
+      if (nrow(hit) == 1) {
+        resolved_perturbation <- as.character(hit$column_name[[1]])
+        resolution_method <- "metadata_name"
+        metadata_name_matches <- metadata_name_matches + 1L
+      }
+    }
+
+    if (is.na(resolved_perturbation)) {
+      hit2 <- available_tbl %>%
+        dplyr::filter(.data$canonical == requested_canonical) %>%
+        dplyr::slice_head(n = 1)
+
+      if (nrow(hit2) == 1) {
+        resolved_perturbation <- as.character(hit2$perturbation[[1]])
+        resolution_method <- "canonical_dataset_column"
+        canonical_fallback_matches <- canonical_fallback_matches + 1L
+      }
+    }
+
+    if (is.na(resolved_perturbation) || !nzchar(resolved_perturbation)) {
+      stop(glue(
+        "[powerup][jobId={job_id}] requested perturbation could not be resolved: '{requested}'"
+      ))
+    }
+
+    resolved_rows[[i]] <- tibble::tibble(
+      requested = requested,
+      requestedOrder = requested_order,
+      resolvedPerturbation = resolved_perturbation,
+      resolutionMethod = resolution_method
     )
-  ) %>%
-    dplyr::group_by(.data$canonical) %>%
+  }
+
+  resolved_tbl <- dplyr::bind_rows(resolved_rows) %>%
+    dplyr::arrange(.data$requestedOrder) %>%
+    dplyr::group_by(.data$resolvedPerturbation) %>%
     dplyr::slice_head(n = 1) %>%
     dplyr::ungroup()
 
-  resolved_tbl <- wanted_tbl %>%
-    dplyr::left_join(available_tbl, by = "canonical") %>%
-    dplyr::arrange(.data$requestedOrder)
-
-  unknown <- resolved_tbl %>%
-    dplyr::filter(is.na(.data$perturbation)) %>%
-    dplyr::pull(.data$requested)
-
-  if (length(unknown) > 0) {
-    message(glue(
-      "[powerup][jobId={job_id}] ignoring unknown requested perturbations after exact canonical matching: ",
-      "{paste(head(unknown, 25), collapse=', ')}",
-      ifelse(length(unknown) > 25, " ...", "")
-    ))
-  }
-
   resolved <- resolved_tbl %>%
-    dplyr::filter(!is.na(.data$perturbation)) %>%
-    dplyr::pull(.data$perturbation)
+    dplyr::arrange(.data$requestedOrder) %>%
+    dplyr::pull(.data$resolvedPerturbation)
 
-  resolved <- unique(resolved)
+  requested_unique <- unique(trimws(as.character(targets)))
+  requested_unique <- requested_unique[nzchar(requested_unique)]
+
+  message(glue(
+    "[powerup][jobId={job_id}] target resolution summary ",
+    "requestedUnique={length(requested_unique)} ",
+    "resolvedUnique={length(resolved)} ",
+    "metadataNameMatches={metadata_name_matches} ",
+    "canonicalFallbackMatches={canonical_fallback_matches}"
+  ))
 
   if (length(resolved) < 1) {
     stop(glue(
-      "[powerup][jobId={job_id}] no requested perturbations matched dataset columns after exact canonical matching"
+      "[powerup][jobId={job_id}] no requested perturbations matched dataset columns after metadata + canonical resolution"
     ))
   }
 
@@ -504,6 +660,7 @@ powerup_preprocess <- function(
   n_features = 6000L,
   targets = NULL,
   selected_samples_path = NULL,
+  perturbation_metadata_path = NULL,
   sensitive_cutoff = 0.75,
   resistant_cutoff = 0.25,
   perturbation_tags = "ko_"
@@ -545,6 +702,13 @@ powerup_preprocess <- function(
   perturbations <- setdiff(colnames(response_df), "cell_line")
   if (length(perturbations) < 1) stop(glue("[powerup][jobId={job_id}] response_df has no perturbation columns"))
 
+  perturbation_metadata_tbl <- .pu_read_perturbation_metadata(
+    path = perturbation_metadata_path,
+    perturbations = perturbations,
+    perturbation_tags = if (identical(tolower(response_set), "crispr")) perturbation_tags else NULL,
+    job_id = job_id
+  )
+
   # ---- Optional perturbation selection (targets)
   # targets can be:
   #   - NULL: use all perturbations
@@ -579,12 +743,13 @@ powerup_preprocess <- function(
       targets_resolved <- .pu_resolve_targets_against_perturbations(
         targets = targets,
         perturbations = perturbations,
+        metadata_tbl = perturbation_metadata_tbl,
         perturbation_tags = if (identical(tolower(response_set), "crispr")) perturbation_tags else NULL,
         job_id = job_id
       )
 
       # Keep deterministic ordering for downstream model keys / shards
-      perturbations <- sort(targets_resolved)
+      perturbations <- as.character(targets_resolved)
 
       requested_targets_clean <- unique(trimws(as.character(targets)))
       requested_targets_clean <- requested_targets_clean[nzchar(requested_targets_clean)]
@@ -668,12 +833,34 @@ powerup_preprocess <- function(
   features_user <- user_matrix %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
 
   # ---- Deterministic perturbations table + model keys ----
-  perturbations <- sort(perturbations)
+  perturbations <- unique(as.character(perturbations))
+  perturbations <- perturbations[nzchar(perturbations)]
+
   model_keys <- sprintf("%s_model_%05d", response_set, seq_along(perturbations))
   perturbations_tbl <- tibble::tibble(
     modelKey = model_keys,
     perturbation = perturbations
   )
+
+  if (!is.null(perturbation_metadata_tbl) && nrow(perturbation_metadata_tbl) > 0) {
+    metadata_join_tbl <- perturbation_metadata_tbl %>%
+      dplyr::rename(perturbation = .data$column_name)
+
+    perturbations_tbl <- perturbations_tbl %>%
+      dplyr::left_join(metadata_join_tbl, by = "perturbation")
+
+    if ("name" %in% names(perturbations_tbl)) {
+      perturbations_tbl <- perturbations_tbl %>%
+        dplyr::mutate(
+          name = dplyr::if_else(
+            is.na(.data$name) | trimws(.data$name) == "",
+            .data$perturbation,
+            .data$name
+          )
+        )
+    }
+  }
+
 
   # ---- Deterministic split (global test set) ----
   split <- .pu_build_split(
@@ -728,6 +915,16 @@ powerup_preprocess <- function(
       path = if (!is.null(selected_samples_path) && nzchar(selected_samples_path)) basename(selected_samples_path) else NULL,
       requested = if (!is.null(selected_sample_ids_raw)) length(selected_sample_ids_raw) else 0L,
       used = length(selected_sample_ids_used)
+    ),
+    perturbationMetadata = list(
+      provided = !is.null(perturbation_metadata_path) &&
+        is.character(perturbation_metadata_path) &&
+        nzchar(trimws(perturbation_metadata_path)) &&
+        file.exists(trimws(perturbation_metadata_path)),
+      path = if (!is.null(perturbation_metadata_path) &&
+                 is.character(perturbation_metadata_path) &&
+                 nzchar(trimws(perturbation_metadata_path))) basename(trimws(perturbation_metadata_path)) else NULL,
+      matchedRows = if (!is.null(perturbation_metadata_tbl)) nrow(perturbation_metadata_tbl) else 0L
     ),
     artifacts = list(
       perturbationsCsv = "perturbations.csv",
