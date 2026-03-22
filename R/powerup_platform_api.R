@@ -29,6 +29,47 @@ powerup_write_json <- function(path, obj) {
   writeLines(jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE), con = path)
 }
 
+powerup_write_lines <- function(path, lines) {
+  if (length(lines) < 1) {
+    lines <- character()
+  }
+  writeLines(as.character(lines), con = path, useBytes = TRUE)
+}
+
+.pu_safe_session_info_lines <- function() {
+  si <- utils::capture.output(utils::sessionInfo())
+  if (length(si) < 1) si <- "sessionInfo() produced no output"
+  si
+}
+
+.pu_runtime_session_r_lines <- function(job_id) {
+  env_names <- c(
+    "WORK_MODE",
+    "RESPONSE_SET",
+    "DATA_VERSION",
+    "PERTURBATION_TAGS_JSON",
+    "POWERUP_RUN_R",
+    "POWERUP_R_STRICT"
+  )
+
+  env_vals <- Sys.getenv(env_names, unset = "")
+  env_lines <- paste0(env_names, "=", unname(env_vals))
+
+  c(
+    sprintf("POWERUP R FINALIZE RUNTIME SESSION"),
+    sprintf("generated_at=%s", format(Sys.time(), tz = "UTC", usetz = TRUE)),
+    sprintf("job_id=%s", as.character(job_id)),
+    "",
+    "[env]",
+    env_lines,
+    "",
+    "[sessionInfo]",
+    .pu_safe_session_info_lines(),
+    ""
+  )
+}
+
+
 # ---- internal helpers (package-private) ----
 
 
@@ -1508,6 +1549,16 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
     "[powerup][jobId={job_id}] FINALIZE start preprocess_dir={out_preprocess_dir} models_dir={models_dir} out={out_aggregates_dir}"
   ))
 
+  runtime_session_r_path <- file.path(out_aggregates_dir, "runtime_session_r.txt")
+  powerup_write_lines(
+    runtime_session_r_path,
+    .pu_runtime_session_r_lines(job_id = job_id)
+  )
+  message(glue(
+    "[powerup][jobId={job_id}] FINALIZE wrote runtime session artifact: {runtime_session_r_path}"
+  ))
+
+  
   `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
   # ---- Source of truth: expected models + perturbation names ----
