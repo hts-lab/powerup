@@ -965,7 +965,7 @@ powerup_preprocess <- function(
 
   if (!is.null(perturbation_metadata_tbl) && nrow(perturbation_metadata_tbl) > 0) {
     metadata_join_tbl <- perturbation_metadata_tbl %>%
-      dplyr::select(-dplyr::any_of(c("nameMatchKey", "columnCanonical"))) %>%
+      dplyr::select(-dplyr::any_of(c("nameMatchKey", "columnCanonical","nameLooseMatchKey"))) %>%
       dplyr::rename(perturbation = .data$column_name)
 
     perturbations_tbl <- perturbations_tbl %>%
@@ -1558,7 +1558,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
     "[powerup][jobId={job_id}] FINALIZE wrote runtime session artifact: {runtime_session_r_path}"
   ))
 
-  
+
   `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
   # ---- Source of truth: expected models + perturbation names ----
@@ -1569,13 +1569,22 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   pert_tbl <- pert_tbl %>%
     dplyr::mutate(
       modelKey = as.character(.data$modelKey),
-      perturbation = as.character(.data$perturbation),
-      displayName = dplyr::if_else(
-        "name" %in% names(.),
-        as.character(.data$name),
-        as.character(.data$perturbation)
+      perturbation = as.character(.data$perturbation)
+    )
+
+  if ("name" %in% names(pert_tbl)) {
+    pert_tbl <- pert_tbl %>%
+      dplyr::mutate(
+        displayName = as.character(.data$name)
       )
-    ) %>%
+  } else {
+    pert_tbl <- pert_tbl %>%
+      dplyr::mutate(
+        displayName = as.character(.data$perturbation)
+      )
+  }
+
+  pert_tbl <- pert_tbl %>%
     dplyr::mutate(
       displayName = dplyr::if_else(
         is.na(.data$displayName) | trimws(.data$displayName) == "",
@@ -1586,6 +1595,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
     dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
     dplyr::distinct(.data$modelKey, .keep_all = TRUE) %>%
     dplyr::arrange(.data$modelKey)
+
 
   if (nrow(pert_tbl) < 1) stop(glue("[powerup][jobId={job_id}] perturbations.csv has 0 valid modelKey rows"))
 
