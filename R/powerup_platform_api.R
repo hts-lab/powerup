@@ -1518,7 +1518,19 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   pert_tbl <- pert_tbl %>%
     dplyr::mutate(
       modelKey = as.character(.data$modelKey),
-      perturbation = as.character(.data$perturbation)
+      perturbation = as.character(.data$perturbation),
+      displayName = dplyr::if_else(
+        "name" %in% names(.),
+        as.character(.data$name),
+        as.character(.data$perturbation)
+      )
+    ) %>%
+    dplyr::mutate(
+      displayName = dplyr::if_else(
+        is.na(.data$displayName) | trimws(.data$displayName) == "",
+        .data$perturbation,
+        .data$displayName
+      )
     ) %>%
     dplyr::filter(!is.na(.data$modelKey), trimws(.data$modelKey) != "") %>%
     dplyr::distinct(.data$modelKey, .keep_all = TRUE) %>%
@@ -1546,9 +1558,10 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
 
   message(glue("[powerup][jobId={job_id}] FINALIZE discovered metrics.json={nrow(metrics_map)}"))
 
-  parse_metrics <- function(path, fallback_model_key, fallback_perturbation) {
+  parse_metrics <- function(path, fallback_model_key, fallback_perturbation, fallback_display_name) {
     jobId_m <- job_id
     perturbation <- fallback_perturbation
+    display_name <- fallback_display_name
     mean_r <- NA_real_
     mean_r2 <- NA_real_
     mean_rmse <- NA_real_
@@ -1574,6 +1587,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       if (!is.null(obj)) {
         jobId_m <- as.character(obj$jobId %||% job_id)
         perturbation <- as.character(obj$perturbation %||% fallback_perturbation)
+        display_name <- as.character(obj$displayName %||% obj$name %||% fallback_display_name)
 
         mean_r <- suppressWarnings(as.numeric(obj$mean_r %||% NA_real_))
         mean_r2 <- suppressWarnings(as.numeric(obj$mean_r2 %||% NA_real_))
@@ -1586,6 +1600,10 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
           errorMessage <- as.character(obj$error$message %||% NA_character_)
         }
       }
+    }
+
+    if (is.na(display_name) || !nzchar(trimws(display_name))) {
+      display_name <- fallback_perturbation
     }
 
     status <- "OK"
@@ -1601,6 +1619,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       jobId = jobId_m,
       modelKey = fallback_model_key,
       perturbation = perturbation,
+      displayName = display_name,
       status = status,
       skipped = isTRUE(skipped),
       mean_r = mean_r,
@@ -1618,7 +1637,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   }
 
   base <- pert_tbl %>%
-    dplyr::select(.data$modelKey, .data$perturbation) %>%
+    dplyr::select(.data$modelKey, .data$perturbation, .data$displayName) %>%
     dplyr::left_join(metrics_map, by = "modelKey")
 
   rows <- vector("list", nrow(base))
@@ -1626,6 +1645,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   for (i in seq_len(nrow(base))) {
     mk <- base$modelKey[[i]]
     pert <- base$perturbation[[i]]
+    display_name <- base$displayName[[i]]
     mf <- base$metricsFile[[i]]
 
     model_dir_gcs <- glue("{gcs_prefix}/{mk}")
@@ -1635,6 +1655,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         jobId = job_id,
         modelKey = mk,
         perturbation = pert,
+        displayName = display_name,
         status = "MISSING_METRICS",
         skipped = TRUE,
         mean_r = NA_real_,
@@ -1650,7 +1671,12 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
       )
     } else {
-      rows[[i]] <- parse_metrics(mf, fallback_model_key = mk, fallback_perturbation = pert)
+      rows[[i]] <- parse_metrics(
+        mf,
+        fallback_model_key = mk,
+        fallback_perturbation = pert,
+        fallback_display_name = display_name
+      )
     }
   }
 
