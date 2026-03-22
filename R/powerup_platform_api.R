@@ -844,6 +844,7 @@ powerup_preprocess <- function(
 
   if (!is.null(perturbation_metadata_tbl) && nrow(perturbation_metadata_tbl) > 0) {
     metadata_join_tbl <- perturbation_metadata_tbl %>%
+      dplyr::select(-dplyr::any_of(c("nameMatchKey", "columnCanonical"))) %>%
       dplyr::rename(perturbation = .data$column_name)
 
     perturbations_tbl <- perturbations_tbl %>%
@@ -860,7 +861,6 @@ powerup_preprocess <- function(
         )
     }
   }
-
 
   # ---- Deterministic split (global test set) ----
   split <- .pu_build_split(
