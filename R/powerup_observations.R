@@ -501,6 +501,77 @@ suppressPackageStartupMessages({
     ungroup()
 }
 
+.pu_obs_ensure_optional_observation_columns <- function(target_tbl) {
+  if (is.null(target_tbl)) {
+    return(target_tbl)
+  }
+
+  add_na_col <- function(df, col, template) {
+    if (!(col %in% colnames(df))) {
+      df[[col]] <- template
+    }
+    df
+  }
+
+  n <- nrow(target_tbl)
+
+  # Columns that may legitimately be absent for canonical-long uploads
+  # or no-controls runs, but downstream code should always be able to reference.
+  target_tbl <- add_na_col(target_tbl, "scaled_target_lfc", rep(NA_real_, n))
+
+  target_tbl <- add_na_col(target_tbl, "positive_probability", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "positive_prediction", rep(NA, n))
+  target_tbl <- add_na_col(target_tbl, "positive_probability_model_status", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "positive_probability_model_message", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "positive_probability_model_feature", rep(NA_character_, n))
+
+  target_tbl <- add_na_col(target_tbl, "obs_stat_used", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_lik_essential", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_lik_nonessential", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_log_lik_essential", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_log_lik_nonessential", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_bayes_factor", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_log_bayes_factor", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_posterior_equal_prior", rep(NA_real_, n))
+
+  target_tbl <- add_na_col(target_tbl, "obs_likelihood_model", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_likelihood_status", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_likelihood_message", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_n_pos_controls", rep(NA_integer_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_n_neg_controls", rep(NA_integer_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_kde_bw", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_kde_adjust", rep(NA_real_, n))
+
+  # Normalize types in case a prior mutate/join created odd types
+  target_tbl <- target_tbl %>%
+    mutate(
+      scaled_target_lfc = suppressWarnings(as.numeric(.data$scaled_target_lfc)),
+      positive_probability = suppressWarnings(as.numeric(.data$positive_probability)),
+      positive_prediction = as.logical(.data$positive_prediction),
+      positive_probability_model_status = as.character(.data$positive_probability_model_status),
+      positive_probability_model_message = as.character(.data$positive_probability_model_message),
+      positive_probability_model_feature = as.character(.data$positive_probability_model_feature),
+      obs_stat_used = as.character(.data$obs_stat_used),
+      obs_lik_essential = suppressWarnings(as.numeric(.data$obs_lik_essential)),
+      obs_lik_nonessential = suppressWarnings(as.numeric(.data$obs_lik_nonessential)),
+      obs_log_lik_essential = suppressWarnings(as.numeric(.data$obs_log_lik_essential)),
+      obs_log_lik_nonessential = suppressWarnings(as.numeric(.data$obs_log_lik_nonessential)),
+      obs_bayes_factor = suppressWarnings(as.numeric(.data$obs_bayes_factor)),
+      obs_log_bayes_factor = suppressWarnings(as.numeric(.data$obs_log_bayes_factor)),
+      obs_posterior_equal_prior = suppressWarnings(as.numeric(.data$obs_posterior_equal_prior)),
+      obs_likelihood_model = as.character(.data$obs_likelihood_model),
+      obs_likelihood_status = as.character(.data$obs_likelihood_status),
+      obs_likelihood_message = as.character(.data$obs_likelihood_message),
+      obs_n_pos_controls = suppressWarnings(as.integer(.data$obs_n_pos_controls)),
+      obs_n_neg_controls = suppressWarnings(as.integer(.data$obs_n_neg_controls)),
+      obs_kde_bw = as.character(.data$obs_kde_bw),
+      obs_kde_adjust = suppressWarnings(as.numeric(.data$obs_kde_adjust))
+    )
+
+  target_tbl
+}
+
+
 .pu_obs_fit_positive_probability <- function(target_tbl) {
   split_tbl <- split(target_tbl, target_tbl$sample, drop = TRUE)
 
@@ -702,6 +773,7 @@ suppressPackageStartupMessages({
 
 
 .pu_obs_build_observation_long_tbl <- function(target_tbl) {
+  target_tbl <- .pu_obs_ensure_optional_observation_columns(target_tbl)
   out <- list()
 
   # avg_lfc rows
@@ -1029,6 +1101,7 @@ suppressPackageStartupMessages({
 
 
 .pu_obs_build_joined_tbl <- function(target_tbl, pred_tbl, response_set, perturbation_tags = "ko_") {
+  target_tbl <- .pu_obs_ensure_optional_observation_columns(target_tbl)
 
   obs_long_tbl <- .pu_obs_build_observation_long_tbl(target_tbl) %>%
     mutate(
@@ -1374,10 +1447,13 @@ powerup_process_observations <- function(
 
   target_tbl <- target_tbl %>%
     .pu_obs_add_control_annotations(controls = controls) %>%
-    .pu_obs_add_scaled_target_lfc()
+    .pu_obs_add_scaled_target_lfc() %>%
+    .pu_obs_ensure_optional_observation_columns()
 
   # Keep existing discriminative score
-  positive_tbl <- .pu_obs_fit_positive_probability(target_tbl)
+  positive_tbl <- .pu_obs_fit_positive_probability(target_tbl) %>%
+    .pu_obs_ensure_optional_observation_columns()
+
 
   fit_feature_examples <- positive_tbl %>%
     dplyr::distinct(.data$sample, .data$positive_probability_model_feature, .data$positive_probability_model_status) %>%
@@ -1396,7 +1472,8 @@ powerup_process_observations <- function(
     bw = "nrd0",
     adjust = 1,
     density_floor = 1e-12
-  )
+  ) %>%
+    .pu_obs_ensure_optional_observation_columns()
 
   joined_tbl <- .pu_obs_build_joined_tbl(
     target_tbl = positive_tbl,
