@@ -133,9 +133,19 @@ powerup_write_json <- function(path, obj) {
   x[is.na(x)] <- ""
   x <- trimws(x)
   x <- tolower(x)
+  x <- gsub("\\s+", "", x, perl = TRUE)
+  x
+}
+
+.pu_normalize_loose_match_key <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  x <- trimws(x)
+  x <- tolower(x)
   x <- gsub("[^a-z0-9]+", "", x, perl = TRUE)
   x
 }
+
 
 .pu_read_perturbation_metadata <- function(
   path = NULL,
@@ -199,6 +209,7 @@ powerup_write_json <- function(path, obj) {
     dplyr::mutate(
       name = dplyr::if_else(is.na(.data$name), "", .data$name),
       nameMatchKey = .pu_normalize_match_key(.data$name),
+      nameLooseMatchKey = .pu_normalize_loose_match_key(.data$name),
       columnCanonical = vapply(
         .data$column_name,
         .pu_canonicalize_perturbation_id,
@@ -213,16 +224,28 @@ powerup_write_json <- function(path, obj) {
     dplyr::filter(.data$n > 1)
 
   if (nrow(dup_name_keys) > 0) {
-    offending <- tbl %>%
-      dplyr::filter(.data$nameMatchKey %in% dup_name_keys$nameMatchKey) %>%
-      dplyr::arrange(.data$nameMatchKey, .data$column_name)
-
-    stop(glue(
-      "[powerup][jobId={job_id}] perturbation metadata normalized name values must be unique; duplicates include: ",
-      "{paste(head(unique(offending$nameMatchKey), 25), collapse=', ')}",
-      ifelse(length(unique(offending$nameMatchKey)) > 25, " ...", "")
+    message(glue(
+      "[powerup][jobId={job_id}] perturbation metadata contains ambiguous exact normalized names; ",
+      "exact metadata-name matching will be skipped for those keys. Examples: ",
+      "{paste(head(dup_name_keys$nameMatchKey, 25), collapse=', ')}",
+      ifelse(nrow(dup_name_keys) > 25, " ...", "")
     ))
   }
+
+  dup_loose_name_keys <- tbl %>%
+    dplyr::filter(nzchar(.data$nameLooseMatchKey)) %>%
+    dplyr::count(.data$nameLooseMatchKey, name = "n") %>%
+    dplyr::filter(.data$n > 1)
+
+  if (nrow(dup_loose_name_keys) > 0) {
+    message(glue(
+      "[powerup][jobId={job_id}] perturbation metadata contains loose fallback groups with multiple members; ",
+      "these will expand to multiple perturbations when exact and canonical matching fail. Examples: ",
+      "{paste(head(dup_loose_name_keys$nameLooseMatchKey, 25), collapse=', ')}",
+      ifelse(nrow(dup_loose_name_keys) > 25, " ...", "")
+    ))
+  }
+
 
   message(glue(
     "[powerup][jobId={job_id}] perturbation metadata loaded rows={nrow(tbl)} ",
@@ -250,7 +273,6 @@ powerup_write_json <- function(path, obj) {
 
   x
 }
-
 
 .pu_resolve_targets_against_perturbations <- function(
   targets,
@@ -302,69 +324,117 @@ powerup_write_json <- function(path, obj) {
       character(1),
       perturbation_tags = perturbation_tags
     ),
-    requestedNameMatchKey = .pu_normalize_match_key(targets)
+    requestedNameMatchKey = .pu_normalize_match_key(targets),
+    requestedLooseMatchKey = .pu_normalize_loose_match_key(targets)
   )
 
   resolved_rows <- vector("list", nrow(wanted_tbl))
 
   metadata_name_matches <- 0L
   canonical_fallback_matches <- 0L
+  loose_metadata_fallback_matches <- 0L
+  exact_metadata_ambiguity_skips <- 0L
+  unresolved_skipped <- character(0)
 
   for (i in seq_len(nrow(wanted_tbl))) {
     requested <- wanted_tbl$requested[[i]]
     requested_order <- wanted_tbl$requestedOrder[[i]]
     requested_canonical <- wanted_tbl$requestedCanonical[[i]]
     requested_name_key <- wanted_tbl$requestedNameMatchKey[[i]]
+    requested_loose_key <- wanted_tbl$requestedLooseMatchKey[[i]]
 
-    resolved_perturbation <- NA_character_
+    resolved_perturbations <- character(0)
     resolution_method <- NA_character_
 
+    # ---------------------------------
+    # STEP 1: exact metadata name match
+    # ---------------------------------
     if (!is.null(metadata_tbl) && nrow(metadata_tbl) > 0 && nzchar(requested_name_key)) {
-      hit <- metadata_tbl %>%
-        dplyr::filter(.data$nameMatchKey == requested_name_key) %>%
-        dplyr::slice_head(n = 1)
+      hits_exact <- metadata_tbl %>%
+        dplyr::filter(.data$nameMatchKey == requested_name_key)
 
-      if (nrow(hit) == 1) {
-        resolved_perturbation <- as.character(hit$column_name[[1]])
+      if (nrow(hits_exact) == 1) {
+        resolved_perturbations <- as.character(hits_exact$column_name)
         resolution_method <- "metadata_name"
         metadata_name_matches <- metadata_name_matches + 1L
+      } else if (nrow(hits_exact) > 1) {
+        exact_metadata_ambiguity_skips <- exact_metadata_ambiguity_skips + 1L
+        message(glue(
+          "[powerup][jobId={job_id}] ambiguous exact metadata name match skipped for requested='{requested}' ",
+          "nameMatchKey='{requested_name_key}' candidates={paste(hits_exact$column_name, collapse='|')}"
+        ))
       }
     }
 
-    if (is.na(resolved_perturbation)) {
+    # ---------------------------------
+    # STEP 2: canonical dataset fallback
+    # ---------------------------------
+    if (length(resolved_perturbations) < 1) {
       hit2 <- available_tbl %>%
         dplyr::filter(.data$canonical == requested_canonical) %>%
         dplyr::slice_head(n = 1)
 
       if (nrow(hit2) == 1) {
-        resolved_perturbation <- as.character(hit2$perturbation[[1]])
+        resolved_perturbations <- as.character(hit2$perturbation)
         resolution_method <- "canonical_dataset_column"
         canonical_fallback_matches <- canonical_fallback_matches + 1L
       }
     }
 
-    if (is.na(resolved_perturbation) || !nzchar(resolved_perturbation)) {
-      stop(glue(
-        "[powerup][jobId={job_id}] requested perturbation could not be resolved: '{requested}'"
+    # ---------------------------------
+    # STEP 3: loose metadata fallback
+    # only if exact metadata + canonical failed
+    # may expand to multiple perturbations
+    # ---------------------------------
+    if (
+      length(resolved_perturbations) < 1 &&
+      !is.null(metadata_tbl) &&
+      nrow(metadata_tbl) > 0 &&
+      nzchar(requested_loose_key)
+    ) {
+      hits_loose <- metadata_tbl %>%
+        dplyr::filter(.data$nameLooseMatchKey == requested_loose_key) %>%
+        dplyr::arrange(.data$column_name)
+
+      if (nrow(hits_loose) >= 1) {
+        resolved_perturbations <- as.character(hits_loose$column_name)
+        resolution_method <- "metadata_name_loose_fallback"
+        loose_metadata_fallback_matches <- loose_metadata_fallback_matches + nrow(hits_loose)
+
+        message(glue(
+          "[powerup][jobId={job_id}] loose metadata fallback expanded requested='{requested}' ",
+          "to {nrow(hits_loose)} perturbation(s): {paste(hits_loose$column_name, collapse='|')}"
+        ))
+      }
+    }
+
+    # ---------------------------------
+    # STEP 4: unresolved -> skip, do not fail
+    # ---------------------------------
+    if (length(resolved_perturbations) < 1) {
+      unresolved_skipped <- c(unresolved_skipped, requested)
+      message(glue(
+        "[powerup][jobId={job_id}] unresolved requested perturbation skipped: '{requested}'"
       ))
+      next
     }
 
     resolved_rows[[i]] <- tibble::tibble(
-      requested = requested,
-      requestedOrder = requested_order,
-      resolvedPerturbation = resolved_perturbation,
-      resolutionMethod = resolution_method
+      requested = rep(requested, length(resolved_perturbations)),
+      requestedOrder = rep(requested_order, length(resolved_perturbations)),
+      resolvedPerturbation = resolved_perturbations,
+      resolutionMethod = rep(resolution_method, length(resolved_perturbations))
     )
   }
 
   resolved_tbl <- dplyr::bind_rows(resolved_rows) %>%
-    dplyr::arrange(.data$requestedOrder) %>%
+    dplyr::arrange(.data$requestedOrder, .data$resolvedPerturbation) %>%
     dplyr::group_by(.data$resolvedPerturbation) %>%
     dplyr::slice_head(n = 1) %>%
     dplyr::ungroup()
 
   resolved <- resolved_tbl %>%
-    dplyr::arrange(.data$requestedOrder) %>%
+    dplyr::arrange(.data$requestedOrder, .data$resolvedPerturbation) %>%
     dplyr::pull(.data$resolvedPerturbation)
 
   requested_unique <- unique(trimws(as.character(targets)))
@@ -375,8 +445,18 @@ powerup_write_json <- function(path, obj) {
     "requestedUnique={length(requested_unique)} ",
     "resolvedUnique={length(resolved)} ",
     "metadataNameMatches={metadata_name_matches} ",
-    "canonicalFallbackMatches={canonical_fallback_matches}"
+    "canonicalFallbackMatches={canonical_fallback_matches} ",
+    "looseMetadataFallbackResolved={loose_metadata_fallback_matches} ",
+    "exactMetadataAmbiguitySkips={exact_metadata_ambiguity_skips} ",
+    "unresolvedSkipped={length(unresolved_skipped)}"
   ))
+
+  if (length(unresolved_skipped) > 0) {
+    message(glue(
+      "[powerup][jobId={job_id}] unresolved requested perturbations skipped: ",
+      "{paste(unique(unresolved_skipped), collapse=', ')}"
+    ))
+  }
 
   if (length(resolved) < 1) {
     stop(glue(
