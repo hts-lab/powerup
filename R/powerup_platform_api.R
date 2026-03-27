@@ -253,7 +253,20 @@ powerup_write_lines <- function(path, lines) {
   genes <- intersect(genes, colnames(user_matrix))
   m <- as.matrix(user_matrix[, genes, drop = FALSE])
 
-  vars <- apply(m, 2, stats::var, na.rm = TRUE)
+  if (nrow(m) < 2) {
+    # Deterministic behavior for single-sample (or zero-row) input:
+    # variance is undefined, so explicitly set all to 0
+    vars <- rep(0, ncol(m))
+    names(vars) <- colnames(m)
+
+    message(glue::glue(
+      "[powerup] variance computed with <2 samples; ",
+      "forcing zero variance for all features (n_samples={nrow(m)})"
+    ))
+  } else {
+    vars <- apply(m, 2, stats::var, na.rm = TRUE)
+  }
+
   vars[is.na(vars)] <- -Inf
 
   ord <- order(-vars, names(vars))   # deterministic tiebreak by gene name
