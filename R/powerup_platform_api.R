@@ -137,6 +137,118 @@ powerup_write_lines <- function(path, lines) {
   ids
 }
 
+
+.pu_read_selected_features <- function(path) {
+  if (is.null(path)) return(NULL)
+  if (!is.character(path) || length(path) != 1) return(NULL)
+
+  path <- trimws(path)
+  if (!nzchar(path)) return(NULL)
+  if (!file.exists(path)) return(NULL)
+
+  txt <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  ids <- unlist(strsplit(txt, "[\r\n,;]+", perl = TRUE), use.names = FALSE)
+  ids <- trimws(as.character(ids))
+  ids <- ids[nzchar(ids)]
+
+  if (length(ids) < 1) return(NULL)
+  ids
+}
+
+.pu_clean_name_key <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  x <- trimws(x)
+
+  x <- gsub("'", "", x, perl = TRUE)
+  x <- gsub("\"", "", x, perl = TRUE)
+  x <- gsub("%", "percent", x, fixed = TRUE)
+  x <- gsub("^\\s+", "", x, perl = TRUE)
+
+  x <- make.names(x)
+
+  # Convert make.names dots to underscores and clean up
+  x <- gsub("[.]+", "_", x, perl = TRUE)
+  x <- gsub("[_]+", "_", x, perl = TRUE)
+  x <- tolower(x)
+  x <- gsub("^_+", "", x, perl = TRUE)
+  x <- gsub("_+$", "", x, perl = TRUE)
+
+  x
+}
+
+.pu_resolve_selected_features <- function(
+  requested_features,
+  available_features,
+  job_id = NA_character_
+) {
+  requested_features <- trimws(as.character(requested_features))
+  requested_features <- requested_features[nzchar(requested_features)]
+  requested_features <- unique(requested_features)
+
+  available_features <- as.character(available_features)
+  available_features <- available_features[nzchar(available_features)]
+  available_features <- unique(available_features)
+
+  if (length(requested_features) < 1 || length(available_features) < 1) {
+    return(list(
+      selected = character(0),
+      requested = requested_features,
+      matched_requested = character(0),
+      missing_requested = requested_features
+    ))
+  }
+
+  available_tbl <- tibble::tibble(
+    feature = available_features,
+    clean_key = .pu_clean_name_key(available_features)
+  ) %>%
+    dplyr::filter(nzchar(.data$clean_key)) %>%
+    dplyr::arrange(.data$feature)
+
+  available_first_by_key <- available_tbl %>%
+    dplyr::group_by(.data$clean_key) %>%
+    dplyr::slice(1) %>%
+    dplyr::ungroup()
+
+  requested_tbl <- tibble::tibble(
+    requested = requested_features,
+    clean_key = .pu_clean_name_key(requested_features),
+    requested_order = seq_along(requested_features)
+  ) %>%
+    dplyr::filter(nzchar(.data$clean_key))
+
+  resolved_tbl <- requested_tbl %>%
+    dplyr::left_join(
+      available_first_by_key %>%
+        dplyr::select(.data$clean_key, matched_feature = .data$feature),
+      by = "clean_key"
+    ) %>%
+    dplyr::arrange(.data$requested_order)
+
+  matched_requested <- resolved_tbl %>%
+    dplyr::filter(!is.na(.data$matched_feature)) %>%
+    dplyr::pull(.data$requested)
+
+  missing_requested <- resolved_tbl %>%
+    dplyr::filter(is.na(.data$matched_feature)) %>%
+    dplyr::pull(.data$requested)
+
+  selected <- resolved_tbl %>%
+    dplyr::filter(!is.na(.data$matched_feature)) %>%
+    dplyr::pull(.data$matched_feature)
+
+  selected <- unique(selected)
+
+  list(
+    selected = selected,
+    requested = requested_features,
+    matched_requested = matched_requested,
+    missing_requested = missing_requested
+  )
+}
+
+
 .pu_select_top_var_genes <- function(user_matrix, genes, n_features) {
   genes <- intersect(genes, colnames(user_matrix))
   m <- as.matrix(user_matrix[, genes, drop = FALSE])
@@ -781,6 +893,7 @@ powerup_preprocess <- function(
   n_features = 6000L,
   targets = NULL,
   selected_samples_path = NULL,
+  selected_features_path = NULL,
   perturbation_metadata_path = NULL,
   sensitive_cutoff = 0.75,
   resistant_cutoff = 0.25,
@@ -934,14 +1047,54 @@ powerup_preprocess <- function(
     message(glue("[powerup][jobId={job_id}] no selected samples file provided; using all user samples for feature selection"))
   }
 
-  # ---- Feature selection: top variable genes on selected subset of user matrix ----
-  n_features_int <- max(1L, as.integer(n_features))
-  selected_genes <- .pu_select_top_var_genes(user_matrix_feature_source, common_genes, n_features_int)
+  # ---- Feature selection: either explicit selected feature list or top variable genes ----
+  selected_features_raw <- .pu_read_selected_features(selected_features_path)
+  selected_features_used <- character(0)
+  selected_features_missing <- character(0)
+  feature_selection_mode <- "top_variable"
+
+  if (!is.null(selected_features_raw) && length(selected_features_raw) > 0) {
+    feature_selection_mode <- "explicit_list"
+
+    feature_resolution <- .pu_resolve_selected_features(
+      requested_features = selected_features_raw,
+      available_features = common_genes,
+      job_id = job_id
+    )
+
+    selected_features_used <- feature_resolution$selected
+    selected_features_missing <- feature_resolution$missing_requested
+    selected_genes <- selected_features_used
+
+    message(glue(
+      "[powerup][jobId={job_id}] explicit selected features provided requested={length(selected_features_raw)} ",
+      "matched={length(selected_features_used)} missing={length(selected_features_missing)}"
+    ))
+
+    if (length(selected_features_missing) > 0) {
+      message(glue(
+        "[powerup][jobId={job_id}] explicit selected features missing after clean-name matching: ",
+        "{paste(head(selected_features_missing, 25), collapse=', ')}",
+        ifelse(length(selected_features_missing) > 25, ' ...', '')
+      ))
+    }
+  } else {
+    n_features_int <- max(1L, as.integer(n_features))
+    selected_genes <- .pu_select_top_var_genes(
+      user_matrix_feature_source,
+      common_genes,
+      n_features_int
+    )
+
+    message(glue(
+      "[powerup][jobId={job_id}] top-variable feature selection used n_features={n_features_int} selected={length(selected_genes)}"
+    ))
+  }
 
   if (length(selected_genes) < 10) {
     stop(glue(
       "[powerup][jobId={job_id}] Feature selection produced too few genes: n={length(selected_genes)} ",
-      "using user_samples_for_feature_selection={nrow(user_matrix_feature_source)}"
+      "mode={feature_selection_mode} using user_samples_for_feature_selection={nrow(user_matrix_feature_source)}"
     ))
   }
 
@@ -1036,6 +1189,16 @@ powerup_preprocess <- function(
       path = if (!is.null(selected_samples_path) && nzchar(selected_samples_path)) basename(selected_samples_path) else NULL,
       requested = if (!is.null(selected_sample_ids_raw)) length(selected_sample_ids_raw) else 0L,
       used = length(selected_sample_ids_used)
+    ),
+    selectedFeaturesForTraining = list(
+      provided = !is.null(selected_features_raw) && length(selected_features_raw) > 0,
+      path = if (!is.null(selected_features_path) &&
+                 is.character(selected_features_path) &&
+                 nzchar(trimws(selected_features_path))) basename(trimws(selected_features_path)) else NULL,
+      mode = feature_selection_mode,
+      requested = if (!is.null(selected_features_raw)) length(selected_features_raw) else 0L,
+      used = length(selected_features_used),
+      missing = length(selected_features_missing)
     ),
     perturbationMetadata = list(
       provided = !is.null(perturbation_metadata_path) &&
