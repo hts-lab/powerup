@@ -525,6 +525,12 @@ suppressPackageStartupMessages({
   target_tbl <- add_na_col(target_tbl, "positive_probability_model_message", rep(NA_character_, n))
   target_tbl <- add_na_col(target_tbl, "positive_probability_model_feature", rep(NA_character_, n))
 
+  target_tbl <- add_na_col(target_tbl, "obs_reps_positive_probability_mean", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_reps_positive_probability_sd", rep(NA_real_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_reps_positive_probability_n", rep(NA_integer_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_reps_positive_probability_status", rep(NA_character_, n))
+  target_tbl <- add_na_col(target_tbl, "obs_reps_positive_probability_message", rep(NA_character_, n))
+
   target_tbl <- add_na_col(target_tbl, "obs_stat_used", rep(NA_character_, n))
   target_tbl <- add_na_col(target_tbl, "obs_lik_essential", rep(NA_real_, n))
   target_tbl <- add_na_col(target_tbl, "obs_lik_nonessential", rep(NA_real_, n))
@@ -551,6 +557,13 @@ suppressPackageStartupMessages({
       positive_probability_model_status = as.character(.data$positive_probability_model_status),
       positive_probability_model_message = as.character(.data$positive_probability_model_message),
       positive_probability_model_feature = as.character(.data$positive_probability_model_feature),
+
+      obs_reps_positive_probability_mean = suppressWarnings(as.numeric(.data$obs_reps_positive_probability_mean)),
+      obs_reps_positive_probability_sd = suppressWarnings(as.numeric(.data$obs_reps_positive_probability_sd)),
+      obs_reps_positive_probability_n = suppressWarnings(as.integer(.data$obs_reps_positive_probability_n)),
+      obs_reps_positive_probability_status = as.character(.data$obs_reps_positive_probability_status),
+      obs_reps_positive_probability_message = as.character(.data$obs_reps_positive_probability_message),
+
       obs_stat_used = as.character(.data$obs_stat_used),
       obs_lik_essential = suppressWarnings(as.numeric(.data$obs_lik_essential)),
       obs_lik_nonessential = suppressWarnings(as.numeric(.data$obs_lik_nonessential)),
@@ -769,7 +782,338 @@ suppressPackageStartupMessages({
   dplyr::bind_rows(out)
 }
 
+.pu_obs_add_continuous_posterior_columns <- function(joined_tbl) {
+  if (is.null(joined_tbl)) {
+    return(joined_tbl)
+  }
 
+  add_na_col <- function(df, col, template) {
+    if (!(col %in% colnames(df))) {
+      df[[col]] <- template
+    }
+    df
+  }
+
+  n <- nrow(joined_tbl)
+
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_model", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_status", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_reason", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_intercept", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_slope", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_calibration_resid_sd", rep(NA_real_, n))
+
+  joined_tbl <- add_na_col(joined_tbl, "obs_implied_response_mean", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_implied_response_sd", rep(NA_real_, n))
+
+  joined_tbl <- add_na_col(joined_tbl, "posterior_mean", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_var", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_sd", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_pi_lower_95", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_pi_upper_95", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_prob_below_cutoff", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_prob_above_cutoff", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_prob_target_event", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_target_event_definition", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_status", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_reason", rep(NA_character_, n))
+
+  joined_tbl <- add_na_col(joined_tbl, "posterior_observation_source", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_observation_value", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "posterior_observation_sd", rep(NA_real_, n))
+
+  joined_tbl <- add_na_col(joined_tbl, "obs_reps_positive_probability_mean", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_reps_positive_probability_sd", rep(NA_real_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_reps_positive_probability_n", rep(NA_integer_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_reps_positive_probability_status", rep(NA_character_, n))
+  joined_tbl <- add_na_col(joined_tbl, "obs_reps_positive_probability_message", rep(NA_character_, n))
+
+  joined_tbl <- joined_tbl %>%
+    mutate(
+      observationType = as.character(.data$observationType),
+      prior_pred_mean = suppressWarnings(as.numeric(.data$prior_pred_mean)),
+      prior_pred_sd = suppressWarnings(as.numeric(.data$prior_pred_sd)),
+      observationValue = suppressWarnings(as.numeric(.data$observationValue)),
+      response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff)),
+      decreasing = as.logical(.data$decreasing),
+
+      obs_reps_positive_probability_mean = suppressWarnings(as.numeric(.data$obs_reps_positive_probability_mean)),
+      obs_reps_positive_probability_sd = suppressWarnings(as.numeric(.data$obs_reps_positive_probability_sd)),
+      obs_reps_positive_probability_n = suppressWarnings(as.integer(.data$obs_reps_positive_probability_n)),
+      obs_reps_positive_probability_status = as.character(.data$obs_reps_positive_probability_status),
+      obs_reps_positive_probability_message = as.character(.data$obs_reps_positive_probability_message),
+
+      obs_calibration_model = as.character(.data$obs_calibration_model),
+      obs_calibration_status = as.character(.data$obs_calibration_status),
+      obs_calibration_reason = as.character(.data$obs_calibration_reason),
+      obs_calibration_intercept = suppressWarnings(as.numeric(.data$obs_calibration_intercept)),
+      obs_calibration_slope = suppressWarnings(as.numeric(.data$obs_calibration_slope)),
+      obs_calibration_resid_sd = suppressWarnings(as.numeric(.data$obs_calibration_resid_sd)),
+
+      posterior_status = dplyr::if_else(
+        is.na(.data$posterior_status) | !nzchar(trimws(.data$posterior_status)),
+        "not_available",
+        .data$posterior_status
+      ),
+      posterior_reason = dplyr::if_else(
+        is.na(.data$posterior_reason) | !nzchar(trimws(.data$posterior_reason)),
+        "No continuous posterior inputs were available.",
+        .data$posterior_reason
+      )
+    )
+
+  prior_mean <- suppressWarnings(as.numeric(joined_tbl$prior_pred_mean))
+  prior_sd <- suppressWarnings(as.numeric(joined_tbl$prior_pred_sd))
+  cutoff <- suppressWarnings(as.numeric(joined_tbl$response_cutoff))
+  decreasing <- as.logical(joined_tbl$decreasing)
+
+  posterior_prob_below_cutoff_fn <- function(mu, sd, cutoff_vec) {
+    stats::pnorm(q = cutoff_vec, mean = mu, sd = sd)
+  }
+
+  # ---------------------------------------------------------------------------
+  # PATH A: same-scale posterior using obs_reps_* values
+  # ---------------------------------------------------------------------------
+  same_scale_obs_type <- joined_tbl$observationType %in% c(
+    "obs_reps_positive_probability_mean"
+  )
+
+  same_scale_valid <- (
+    same_scale_obs_type &
+      is.finite(prior_mean) &
+      is.finite(prior_sd) &
+      (prior_sd > 0) &
+      is.finite(joined_tbl$obs_reps_positive_probability_mean) &
+      is.finite(joined_tbl$obs_reps_positive_probability_sd) &
+      (joined_tbl$obs_reps_positive_probability_sd > 0)
+  )
+
+  if (any(same_scale_valid)) {
+    obs_value_same <- joined_tbl$obs_reps_positive_probability_mean[same_scale_valid]
+    obs_sd_same <- joined_tbl$obs_reps_positive_probability_sd[same_scale_valid]
+
+    prior_var_same <- prior_sd[same_scale_valid]^2
+    obs_var_same <- obs_sd_same^2
+
+    posterior_var_same <- 1 / ((1 / prior_var_same) + (1 / obs_var_same))
+    posterior_sd_same <- sqrt(pmax(posterior_var_same, 0))
+    posterior_mean_same <- posterior_var_same * (
+      (prior_mean[same_scale_valid] / prior_var_same) +
+        (obs_value_same / obs_var_same)
+    )
+
+    posterior_pi_lower_95_same <- posterior_mean_same - 1.96 * posterior_sd_same
+    posterior_pi_upper_95_same <- posterior_mean_same + 1.96 * posterior_sd_same
+
+    posterior_prob_below_cutoff_same <- rep(NA_real_, sum(same_scale_valid))
+    posterior_prob_above_cutoff_same <- rep(NA_real_, sum(same_scale_valid))
+    posterior_prob_target_event_same <- rep(NA_real_, sum(same_scale_valid))
+    posterior_target_event_definition_same <- rep(NA_character_, sum(same_scale_valid))
+
+    cutoff_valid_same <- is.finite(cutoff[same_scale_valid]) &
+      is.finite(posterior_mean_same) &
+      is.finite(posterior_sd_same) &
+      (posterior_sd_same > 0)
+
+    if (any(cutoff_valid_same)) {
+      posterior_prob_below_cutoff_same[cutoff_valid_same] <- posterior_prob_below_cutoff_fn(
+        mu = posterior_mean_same[cutoff_valid_same],
+        sd = posterior_sd_same[cutoff_valid_same],
+        cutoff_vec = cutoff[same_scale_valid][cutoff_valid_same]
+      )
+      posterior_prob_above_cutoff_same[cutoff_valid_same] <- 1 - posterior_prob_below_cutoff_same[cutoff_valid_same]
+
+      dec_vals <- decreasing[same_scale_valid][cutoff_valid_same]
+      posterior_prob_target_event_same[cutoff_valid_same] <- ifelse(
+        isTRUE(dec_vals) | (!is.na(dec_vals) & dec_vals),
+        posterior_prob_below_cutoff_same[cutoff_valid_same],
+        posterior_prob_above_cutoff_same[cutoff_valid_same]
+      )
+
+      posterior_target_event_definition_same[cutoff_valid_same] <- ifelse(
+        isTRUE(dec_vals) | (!is.na(dec_vals) & dec_vals),
+        "P(response <= cutoff | prior, obs_reps score)",
+        "P(response >= cutoff | prior, obs_reps score)"
+      )
+    }
+
+    joined_tbl$obs_implied_response_mean[same_scale_valid] <- obs_value_same
+    joined_tbl$obs_implied_response_sd[same_scale_valid] <- obs_sd_same
+
+    joined_tbl$posterior_mean[same_scale_valid] <- posterior_mean_same
+    joined_tbl$posterior_var[same_scale_valid] <- posterior_var_same
+    joined_tbl$posterior_sd[same_scale_valid] <- posterior_sd_same
+    joined_tbl$posterior_pi_lower_95[same_scale_valid] <- posterior_pi_lower_95_same
+    joined_tbl$posterior_pi_upper_95[same_scale_valid] <- posterior_pi_upper_95_same
+    joined_tbl$posterior_prob_below_cutoff[same_scale_valid] <- posterior_prob_below_cutoff_same
+    joined_tbl$posterior_prob_above_cutoff[same_scale_valid] <- posterior_prob_above_cutoff_same
+    joined_tbl$posterior_prob_target_event[same_scale_valid] <- posterior_prob_target_event_same
+    joined_tbl$posterior_target_event_definition[same_scale_valid] <- posterior_target_event_definition_same
+
+    joined_tbl$posterior_observation_source[same_scale_valid] <- "obs_reps_positive_probability"
+    joined_tbl$posterior_observation_value[same_scale_valid] <- obs_value_same
+    joined_tbl$posterior_observation_sd[same_scale_valid] <- obs_sd_same
+
+    joined_tbl$posterior_status[same_scale_valid] <- "fit_ok_same_scale_obs_reps"
+    joined_tbl$posterior_reason[same_scale_valid] <- NA_character_
+  }
+
+  same_scale_bad_prior <- (
+    same_scale_obs_type &
+      !same_scale_valid &
+      (
+        !is.finite(prior_mean) |
+          !is.finite(prior_sd) |
+          !(prior_sd > 0)
+      )
+  )
+  joined_tbl$posterior_status[same_scale_bad_prior] <- "not_available_bad_prior"
+  joined_tbl$posterior_reason[same_scale_bad_prior] <- "Missing or invalid prior_pred_mean/prior_pred_sd."
+
+  same_scale_bad_obs <- (
+    same_scale_obs_type &
+      !same_scale_valid &
+      !same_scale_bad_prior &
+      (
+        !is.finite(joined_tbl$obs_reps_positive_probability_mean) |
+          !is.finite(joined_tbl$obs_reps_positive_probability_sd) |
+          !(joined_tbl$obs_reps_positive_probability_sd > 0)
+      )
+  )
+  joined_tbl$posterior_status[same_scale_bad_obs] <- "not_available_bad_obs_reps"
+  joined_tbl$posterior_reason[same_scale_bad_obs] <- paste(
+    "obs_reps posterior requires finite obs_reps_positive_probability_mean",
+    "and positive obs_reps_positive_probability_sd."
+  )
+
+  # ---------------------------------------------------------------------------
+  # PATH B: fallback calibration-based posterior for other cases
+  # ---------------------------------------------------------------------------
+  calibration_candidate <- !same_scale_valid
+
+  has_calibration_cols <- all(c(
+    "obs_calibration_intercept",
+    "obs_calibration_slope",
+    "obs_calibration_resid_sd"
+  ) %in% colnames(joined_tbl))
+
+  if (!has_calibration_cols) {
+    return(joined_tbl)
+  }
+
+  obs_value <- suppressWarnings(as.numeric(joined_tbl$observationValue))
+  a <- suppressWarnings(as.numeric(joined_tbl$obs_calibration_intercept))
+  b <- suppressWarnings(as.numeric(joined_tbl$obs_calibration_slope))
+  obs_sd <- suppressWarnings(as.numeric(joined_tbl$obs_calibration_resid_sd))
+
+  valid <- (
+    calibration_candidate &
+      is.finite(prior_mean) &
+      is.finite(prior_sd) &
+      (prior_sd > 0) &
+      is.finite(obs_value) &
+      is.finite(a) &
+      is.finite(b) &
+      (abs(b) > 1e-12) &
+      is.finite(obs_sd) &
+      (obs_sd > 0)
+  )
+
+  if (!any(valid)) {
+    return(joined_tbl)
+  }
+
+  prior_var <- prior_sd[valid]^2
+  obs_var <- obs_sd[valid]^2
+
+  obs_implied_mean <- (obs_value[valid] - a[valid]) / b[valid]
+  obs_implied_sd <- obs_sd[valid] / abs(b[valid])
+
+  posterior_var <- 1 / ((1 / prior_var) + ((b[valid]^2) / obs_var))
+  posterior_sd <- sqrt(pmax(posterior_var, 0))
+  posterior_mean <- posterior_var * (
+    (prior_mean[valid] / prior_var) +
+      (b[valid] * (obs_value[valid] - a[valid]) / obs_var)
+  )
+
+  posterior_pi_lower_95 <- posterior_mean - 1.96 * posterior_sd
+  posterior_pi_upper_95 <- posterior_mean + 1.96 * posterior_sd
+
+  posterior_prob_below_cutoff <- rep(NA_real_, sum(valid))
+  posterior_prob_above_cutoff <- rep(NA_real_, sum(valid))
+  posterior_prob_target_event <- rep(NA_real_, sum(valid))
+  posterior_target_event_definition <- rep(NA_character_, sum(valid))
+
+  cutoff_valid <- is.finite(cutoff[valid]) & is.finite(posterior_mean) & is.finite(posterior_sd) & (posterior_sd > 0)
+  if (any(cutoff_valid)) {
+    posterior_prob_below_cutoff[cutoff_valid] <- posterior_prob_below_cutoff_fn(
+      mu = posterior_mean[cutoff_valid],
+      sd = posterior_sd[cutoff_valid],
+      cutoff_vec = cutoff[valid][cutoff_valid]
+    )
+    posterior_prob_above_cutoff[cutoff_valid] <- 1 - posterior_prob_below_cutoff[cutoff_valid]
+
+    dec_vals <- decreasing[valid][cutoff_valid]
+    posterior_prob_target_event[cutoff_valid] <- ifelse(
+      isTRUE(dec_vals) | (!is.na(dec_vals) & dec_vals),
+      posterior_prob_below_cutoff[cutoff_valid],
+      posterior_prob_above_cutoff[cutoff_valid]
+    )
+
+    posterior_target_event_definition[cutoff_valid] <- ifelse(
+      isTRUE(dec_vals) | (!is.na(dec_vals) & dec_vals),
+      "P(response <= cutoff | prior, observation)",
+      "P(response >= cutoff | prior, observation)"
+    )
+  }
+
+  joined_tbl$obs_implied_response_mean[valid] <- obs_implied_mean
+  joined_tbl$obs_implied_response_sd[valid] <- obs_implied_sd
+
+  joined_tbl$posterior_mean[valid] <- posterior_mean
+  joined_tbl$posterior_var[valid] <- posterior_var
+  joined_tbl$posterior_sd[valid] <- posterior_sd
+  joined_tbl$posterior_pi_lower_95[valid] <- posterior_pi_lower_95
+  joined_tbl$posterior_pi_upper_95[valid] <- posterior_pi_upper_95
+  joined_tbl$posterior_prob_below_cutoff[valid] <- posterior_prob_below_cutoff
+  joined_tbl$posterior_prob_above_cutoff[valid] <- posterior_prob_above_cutoff
+  joined_tbl$posterior_prob_target_event[valid] <- posterior_prob_target_event
+  joined_tbl$posterior_target_event_definition[valid] <- posterior_target_event_definition
+
+  joined_tbl$posterior_observation_source[valid] <- "calibrated_observation"
+  joined_tbl$posterior_observation_value[valid] <- obs_value[valid]
+  joined_tbl$posterior_observation_sd[valid] <- obs_sd[valid]
+
+  joined_tbl$posterior_status[valid] <- "fit_ok_calibrated"
+  joined_tbl$posterior_reason[valid] <- NA_character_
+
+  missing_prior <- calibration_candidate & !valid & (
+    !is.finite(prior_mean) |
+      !is.finite(prior_sd) |
+      !(prior_sd > 0)
+  )
+  joined_tbl$posterior_status[missing_prior] <- "not_available_bad_prior"
+  joined_tbl$posterior_reason[missing_prior] <- "Missing or invalid prior_pred_mean/prior_pred_sd."
+
+  missing_obs <- calibration_candidate & !valid & !missing_prior & !is.finite(obs_value)
+  joined_tbl$posterior_status[missing_obs] <- "not_available_missing_observation"
+  joined_tbl$posterior_reason[missing_obs] <- "Missing or invalid observationValue."
+
+  bad_calibration <- calibration_candidate & !valid & !missing_prior & !missing_obs & (
+    !is.finite(a) |
+      !is.finite(b) |
+      abs(b) <= 1e-12 |
+      !is.finite(obs_sd) |
+      !(obs_sd > 0)
+  )
+  joined_tbl$posterior_status[bad_calibration] <- "not_available_bad_calibration"
+  joined_tbl$posterior_reason[bad_calibration] <- paste(
+    "Continuous posterior requires finite obs_calibration_intercept,",
+    "non-zero obs_calibration_slope, and positive obs_calibration_resid_sd."
+  )
+
+  joined_tbl
+}
 
 
 .pu_obs_build_observation_long_tbl <- function(target_tbl) {
@@ -895,6 +1239,53 @@ suppressPackageStartupMessages({
       obs_kde_adjust = .data$obs_kde_adjust
     )
   out[[length(out) + 1L]] <- prob_tbl
+
+
+  # obs_reps_positive_probability_mean rows
+  obs_reps_prob_tbl <- target_tbl %>%
+    filter(!is.na(.data$obs_reps_positive_probability_mean)) %>%
+    transmute(
+      sample = .data$sample,
+      perturbation = .data$perturbation,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      gene_symbol = .data$gene_symbol,
+      observationType = "obs_reps_positive_probability_mean",
+      observationValue = as.numeric(.data$obs_reps_positive_probability_mean),
+      control = .data$control,
+      category_input = .data$category_input,
+      n_guides = .data$n_guides,
+      target_z = .data$target_z,
+      target_z_pvalue = .data$target_z_pvalue,
+      target_z_fdr = .data$target_z_fdr,
+      mean_target_lfc = .data$mean_target_lfc,
+      scaled_target_lfc = .data$scaled_target_lfc,
+      positive_probability = .data$positive_probability,
+      positive_prediction = .data$positive_prediction,
+      positive_probability_model_status = .data$positive_probability_model_status,
+      positive_probability_model_message = .data$positive_probability_model_message,
+      obs_reps_positive_probability_mean = .data$obs_reps_positive_probability_mean,
+      obs_reps_positive_probability_sd = .data$obs_reps_positive_probability_sd,
+      obs_reps_positive_probability_n = .data$obs_reps_positive_probability_n,
+      obs_reps_positive_probability_status = .data$obs_reps_positive_probability_status,
+      obs_reps_positive_probability_message = .data$obs_reps_positive_probability_message,
+      obs_stat_used = .data$obs_stat_used,
+      obs_lik_essential = .data$obs_lik_essential,
+      obs_lik_nonessential = .data$obs_lik_nonessential,
+      obs_log_lik_essential = .data$obs_log_lik_essential,
+      obs_log_lik_nonessential = .data$obs_log_lik_nonessential,
+      obs_bayes_factor = .data$obs_bayes_factor,
+      obs_log_bayes_factor = .data$obs_log_bayes_factor,
+      obs_posterior_equal_prior = .data$obs_posterior_equal_prior,
+      obs_likelihood_model = .data$obs_likelihood_model,
+      obs_likelihood_status = .data$obs_likelihood_status,
+      obs_likelihood_message = .data$obs_likelihood_message,
+      obs_n_pos_controls = .data$obs_n_pos_controls,
+      obs_n_neg_controls = .data$obs_n_neg_controls,
+      obs_kde_bw = .data$obs_kde_bw,
+      obs_kde_adjust = .data$obs_kde_adjust
+    )
+  out[[length(out) + 1L]] <- obs_reps_prob_tbl
+
 
   # obs_lik_essential rows
   lik_ess_tbl <- target_tbl %>%
@@ -1222,7 +1613,8 @@ suppressPackageStartupMessages({
       prior_pred_pi_upper_95 = suppressWarnings(as.numeric(.data$pred_pi_upper_95)),
       decreasing = .data$decreasing,
       response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff))
-    )
+    ) %>%
+    .pu_obs_add_continuous_posterior_columns()
 }
 
 
@@ -1358,7 +1750,40 @@ suppressPackageStartupMessages({
         obsLikNonessential = json_num_or_null(row$obs_lik_nonessential[[1]]),
         obsBayesFactor = json_num_or_null(row$obs_bayes_factor[[1]]),
         obsLogBayesFactor = json_num_or_null(row$obs_log_bayes_factor[[1]]),
-        obsPosteriorEqualPrior = json_num_or_null(row$obs_posterior_equal_prior[[1]])
+        obsPosteriorEqualPrior = json_num_or_null(row$obs_posterior_equal_prior[[1]]),
+
+        # Continuous posterior layer (additive; may be NA until calibration is available)
+        obsCalibrationModel = if ("obs_calibration_model" %in% colnames(row)) as.character(row$obs_calibration_model[[1]]) else NULL,
+        obsCalibrationStatus = if ("obs_calibration_status" %in% colnames(row)) as.character(row$obs_calibration_status[[1]]) else NULL,
+        obsCalibrationReason = if ("obs_calibration_reason" %in% colnames(row)) as.character(row$obs_calibration_reason[[1]]) else NULL,
+        obsCalibrationIntercept = if ("obs_calibration_intercept" %in% colnames(row)) json_num_or_null(row$obs_calibration_intercept[[1]]) else NULL,
+        obsCalibrationSlope = if ("obs_calibration_slope" %in% colnames(row)) json_num_or_null(row$obs_calibration_slope[[1]]) else NULL,
+        obsCalibrationResidSd = if ("obs_calibration_resid_sd" %in% colnames(row)) json_num_or_null(row$obs_calibration_resid_sd[[1]]) else NULL,
+        obsImpliedResponseMean = if ("obs_implied_response_mean" %in% colnames(row)) json_num_or_null(row$obs_implied_response_mean[[1]]) else NULL,
+        obsImpliedResponseSd = if ("obs_implied_response_sd" %in% colnames(row)) json_num_or_null(row$obs_implied_response_sd[[1]]) else NULL,
+
+        posteriorMean = if ("posterior_mean" %in% colnames(row)) json_num_or_null(row$posterior_mean[[1]]) else NULL,
+        posteriorVar = if ("posterior_var" %in% colnames(row)) json_num_or_null(row$posterior_var[[1]]) else NULL,
+        posteriorSd = if ("posterior_sd" %in% colnames(row)) json_num_or_null(row$posterior_sd[[1]]) else NULL,
+        posteriorPiLower95 = if ("posterior_pi_lower_95" %in% colnames(row)) json_num_or_null(row$posterior_pi_lower_95[[1]]) else NULL,
+        posteriorPiUpper95 = if ("posterior_pi_upper_95" %in% colnames(row)) json_num_or_null(row$posterior_pi_upper_95[[1]]) else NULL,
+        posteriorProbBelowCutoff = if ("posterior_prob_below_cutoff" %in% colnames(row)) json_num_or_null(row$posterior_prob_below_cutoff[[1]]) else NULL,
+        posteriorProbAboveCutoff = if ("posterior_prob_above_cutoff" %in% colnames(row)) json_num_or_null(row$posterior_prob_above_cutoff[[1]]) else NULL,
+        posteriorProbTargetEvent = if ("posterior_prob_target_event" %in% colnames(row)) json_num_or_null(row$posterior_prob_target_event[[1]]) else NULL,
+        posteriorTargetEventDefinition = if ("posterior_target_event_definition" %in% colnames(row)) as.character(row$posterior_target_event_definition[[1]]) else NULL,
+        posteriorStatus = if ("posterior_status" %in% colnames(row)) as.character(row$posterior_status[[1]]) else NULL,
+        posteriorReason = if ("posterior_reason" %in% colnames(row)) as.character(row$posterior_reason[[1]]) else NULL,
+        posteriorObservationSource = if ("posterior_observation_source" %in% colnames(row)) as.character(row$posterior_observation_source[[1]]) else NULL,
+        posteriorObservationValue = if ("posterior_observation_value" %in% colnames(row)) json_num_or_null(row$posterior_observation_value[[1]]) else NULL,
+        posteriorObservationSd = if ("posterior_observation_sd" %in% colnames(row)) json_num_or_null(row$posterior_observation_sd[[1]]) else NULL,
+
+        obsRepsPositiveProbabilityMean = if ("obs_reps_positive_probability_mean" %in% colnames(row)) json_num_or_null(row$obs_reps_positive_probability_mean[[1]]) else NULL,
+        obsRepsPositiveProbabilitySd = if ("obs_reps_positive_probability_sd" %in% colnames(row)) json_num_or_null(row$obs_reps_positive_probability_sd[[1]]) else NULL,
+        obsRepsPositiveProbabilityN = if ("obs_reps_positive_probability_n" %in% colnames(row)) json_num_or_null(row$obs_reps_positive_probability_n[[1]]) else NULL,
+        obsRepsPositiveProbabilityStatus = if ("obs_reps_positive_probability_status" %in% colnames(row)) as.character(row$obs_reps_positive_probability_status[[1]]) else NULL,
+        obsRepsPositiveProbabilityMessage = if ("obs_reps_positive_probability_message" %in% colnames(row)) as.character(row$obs_reps_positive_probability_message[[1]]) else NULL
+
+
       )
     })
   )
@@ -1541,6 +1966,12 @@ powerup_process_observations <- function(
   )
 
 
+  nContinuousPosteriorRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$posterior_mean))) &
+      is.finite(suppressWarnings(as.numeric(joined_tbl$posterior_sd))),
+    na.rm = TRUE
+  )
+
 observed_samples <- sort(unique(as.character(
   target_tbl$sample[!is.na(target_tbl$sample)]
 )))
@@ -1573,6 +2004,7 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       nMatchedRows = nrow(matched_rows_only),
       nPriorGaussianRows = nPriorGaussianRows,
       nObsLikelihoodRows = nObsLikelihoodRows,
+      nContinuousPosteriorRows = nContinuousPosteriorRows,
       nObservedSamples = length(observed_samples),
       nPredictedSamples = length(predicted_samples),
       nOverlappingSamples = length(overlapping_samples),
@@ -1604,8 +2036,13 @@ sampleOverlap = list(
       uploadedNegativeNormalizedCount = if (!is.null(controls$uploaded)) length(controls$uploaded$negativeNormalized) else 0L
     ),
     posterior = list(
-      mode = "not_precomputed_backend",
-      reason = "frontend cutoff is user-adjustable, so cutoff-specific prior/posterior must be computed dynamically",
+      mode = "continuous_posterior_columns_added",
+      reason = paste(
+        "Backend now writes additive continuous-posterior columns using either",
+        "a same-scale observation path (for example obs_reps-positive-probability",
+        "mean/sd when available) or a continuous calibration path when available.",
+        "Current KDE class-likelihood fields remain unchanged and are still written."
+      ),
       priorDistribution = list(
         family = "gaussian",
         meanColumn = "prior_pred_mean",
@@ -1624,6 +2061,36 @@ sampleOverlap = list(
         equalPriorPosteriorColumn = "obs_posterior_equal_prior",
         observationStatisticUsed = "target_z",
         model = "kde"
+      ),
+      continuousPosterior = list(
+        family = "gaussian",
+        statusColumn = "posterior_status",
+        reasonColumn = "posterior_reason",
+        meanColumn = "posterior_mean",
+        varColumn = "posterior_var",
+        sdColumn = "posterior_sd",
+        piLower95Column = "posterior_pi_lower_95",
+        piUpper95Column = "posterior_pi_upper_95",
+        probBelowCutoffColumn = "posterior_prob_below_cutoff",
+        probAboveCutoffColumn = "posterior_prob_above_cutoff",
+        probTargetEventColumn = "posterior_prob_target_event",
+        targetEventDefinitionColumn = "posterior_target_event_definition",
+        observationCalibrationModelColumn = "obs_calibration_model",
+        observationCalibrationStatusColumn = "obs_calibration_status",
+        observationCalibrationReasonColumn = "obs_calibration_reason",
+        observationCalibrationInterceptColumn = "obs_calibration_intercept",
+        observationCalibrationSlopeColumn = "obs_calibration_slope",
+        observationCalibrationResidSdColumn = "obs_calibration_resid_sd",
+        observationImpliedResponseMeanColumn = "obs_implied_response_mean",
+        observationImpliedResponseSdColumn = "obs_implied_response_sd",
+        observationSourceColumn = "posterior_observation_source",
+        observationValueColumn = "posterior_observation_value",
+        observationSdColumn = "posterior_observation_sd",
+        obsRepsMeanColumn = "obs_reps_positive_probability_mean",
+        obsRepsSdColumn = "obs_reps_positive_probability_sd",
+        obsRepsNColumn = "obs_reps_positive_probability_n",
+        obsRepsStatusColumn = "obs_reps_positive_probability_status",
+        obsRepsMessageColumn = "obs_reps_positive_probability_message"
       )
     )
   )

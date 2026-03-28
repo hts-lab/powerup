@@ -541,6 +541,164 @@ suppressPackageStartupMessages({
 }
 
 
+.pu_obs_counts_build_replicate_level_lfcs <- function(lfcs_tbl, ref_sample = NULL) {
+  ref_sample_norm <- if (!is.null(ref_sample) && length(ref_sample) >= 1) {
+    x <- as.character(ref_sample[[1]])
+    x <- .pu_obs_counts_clean_colname(x)[1]
+    if (is.na(x) || !nzchar(x)) NA_character_ else x
+  } else {
+    NA_character_
+  }
+
+  lfcs_tbl %>%
+    mutate(
+      sample = .pu_obs_counts_clean_colname(as.character(.data$sample)),
+      sample_norm = .data$sample,
+      is_reference_sample = case_when(
+        !is.na(ref_sample_norm) & .data$sample_norm == ref_sample_norm ~ TRUE,
+        str_detect(.data$sample_norm, "_t0$") ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      biological_sample = .pu_obs_counts_clean_colname(
+        str_replace(.data$sample, "_[Rr][0-9]+$", "")
+      ),
+      replicate_sample = .data$sample
+    ) %>%
+    filter(!.data$is_reference_sample) %>%
+    group_by(.data$biological_sample, .data$replicate_sample, .data$construct_barcode) %>%
+    summarize(
+      n_replicates = 1L,
+      avg_lfc = mean(.data$lfc, na.rm = TRUE),
+      var_lfc = NA_real_,
+      sd_lfc = NA_real_,
+      avg_reads = mean(.data$reads, na.rm = TRUE),
+      var_reads = NA_real_,
+      .groups = "drop"
+    ) %>%
+    rename(sample = .data$replicate_sample)
+}
+
+.pu_obs_counts_summarize_replicate_positive_probability <- function(
+  lfcs_tbl,
+  ref_sample,
+  reference_tbl,
+  new_reference_tbl,
+  neg_controls_pattern,
+  neg_controls_fuzzy,
+  pos_controls,
+  neg_controls,
+  include_unexpressed = character(0),
+  sd_cutoff = NA_real_,
+  min_guides = 2L,
+  perturbation_tags = "ko_"
+) {
+  rep_lfcs <- .pu_obs_counts_build_replicate_level_lfcs(
+    lfcs_tbl = lfcs_tbl,
+    ref_sample = ref_sample
+  )
+
+  if (nrow(rep_lfcs) < 1) {
+    return(tibble(
+      sample = character(0),
+      normalizedPerturbation = character(0),
+      obs_reps_positive_probability_mean = numeric(0),
+      obs_reps_positive_probability_sd = numeric(0),
+      obs_reps_positive_probability_n = integer(0),
+      obs_reps_positive_probability_status = character(0),
+      obs_reps_positive_probability_message = character(0)
+    ))
+  }
+
+  rep_target_tbl <- .pu_obs_counts_get_targets_table(
+    lfcs_collapsed = rep_lfcs,
+    reference_tbl = reference_tbl,
+    new_reference_tbl = new_reference_tbl,
+    neg_controls_pattern = neg_controls_pattern,
+    neg_controls_fuzzy = neg_controls_fuzzy,
+    pos_controls = pos_controls,
+    neg_controls = neg_controls,
+    include_unexpressed = include_unexpressed,
+    sd_cutoff = sd_cutoff,
+    min_guides = min_guides,
+    perturbation_tags = perturbation_tags
+  ) %>%
+    mutate(
+      sample = .pu_obs_counts_clean_colname(as.character(.data$sample)),
+      biological_sample = .pu_obs_counts_clean_colname(
+        str_replace(.data$sample, "_[Rr][0-9]+$", "")
+      )
+    )
+
+  rep_valid_tbl <- rep_target_tbl %>%
+    filter(is.finite(.data$positive_probability))
+
+  rep_summary_tbl <- rep_valid_tbl %>%
+    group_by(.data$biological_sample, .data$normalizedPerturbation) %>%
+    summarize(
+      obs_reps_positive_probability_mean = mean(.data$positive_probability, na.rm = TRUE),
+      obs_reps_positive_probability_sd = ifelse(
+        dplyr::n() > 1,
+        stats::sd(.data$positive_probability, na.rm = TRUE),
+        NA_real_
+      ),
+      obs_reps_positive_probability_n = as.integer(dplyr::n()),
+      .groups = "drop"
+    ) %>%
+    rename(sample = .data$biological_sample)
+
+  rep_status_tbl <- rep_target_tbl %>%
+    group_by(.data$biological_sample, .data$normalizedPerturbation) %>%
+    summarize(
+      n_rows_total = dplyr::n(),
+      n_rows_fit_ok = sum(.data$positive_probability_model_status == "fit_ok", na.rm = TRUE),
+      n_rows_with_value = sum(is.finite(.data$positive_probability), na.rm = TRUE),
+      status_values = paste(
+        sort(unique(as.character(.data$positive_probability_model_status[!is.na(.data$positive_probability_model_status)]))),
+        collapse = "|"
+      ),
+      message_values = paste(
+        unique(as.character(.data$positive_probability_model_message[
+          !is.na(.data$positive_probability_model_message) &
+            nzchar(trimws(.data$positive_probability_model_message))
+        ])),
+        collapse = " | "
+      ),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      obs_reps_positive_probability_status = dplyr::case_when(
+        .data$n_rows_with_value >= 2 ~ "fit_ok_replicates",
+        .data$n_rows_with_value == 1 ~ "single_replicate_only",
+        .data$n_rows_fit_ok >= 1 ~ "fit_ok_no_numeric_value",
+        TRUE ~ "not_fit"
+      ),
+      obs_reps_positive_probability_message = dplyr::case_when(
+        .data$n_rows_with_value >= 2 ~ NA_character_,
+        .data$n_rows_with_value == 1 ~ "Only one replicate produced a finite positive_probability.",
+        nzchar(.data$message_values) ~ .data$message_values,
+        nzchar(.data$status_values) ~ paste("Replicate model statuses:", .data$status_values),
+        TRUE ~ "No replicate-specific positive_probability values were produced."
+      )
+    ) %>%
+    transmute(
+      sample = .data$biological_sample,
+      normalizedPerturbation = .data$normalizedPerturbation,
+      obs_reps_positive_probability_status = .data$obs_reps_positive_probability_status,
+      obs_reps_positive_probability_message = .data$obs_reps_positive_probability_message
+    )
+
+  rep_status_tbl %>%
+    left_join(rep_summary_tbl, by = c("sample", "normalizedPerturbation")) %>%
+    mutate(
+      obs_reps_positive_probability_n = dplyr::coalesce(
+        suppressWarnings(as.integer(.data$obs_reps_positive_probability_n)),
+        0L
+      )
+    )
+}
+
+
+
 .pu_obs_counts_get_neg_controls <- function(reference_tbl, pattern, fuzzy = FALSE) {
   if (isTRUE(fuzzy)) {
     reference_tbl %>%
@@ -975,6 +1133,32 @@ powerup_process_observations_from_counts <- function(
     )
   )
 
+
+  obs_reps_tbl <- .pu_obs_counts_step(
+    "summarize_replicate_positive_probability",
+    .pu_obs_counts_summarize_replicate_positive_probability(
+      lfcs_tbl = lfcs_tbl,
+      ref_sample = reference_sample,
+      reference_tbl = reference_tbl,
+      new_reference_tbl = new_reference_tbl,
+      neg_controls_pattern = cfg$guideNegativeControlPatterns,
+      neg_controls_fuzzy = cfg$guideNegativeControlFuzzy,
+      pos_controls = pos_controls,
+      neg_controls = neg_controls,
+      include_unexpressed = cfg$includeUnexpressed,
+      sd_cutoff = cfg$sdCutoff,
+      min_guides = cfg$minGuides,
+      perturbation_tags = perturbation_tags
+    )
+  )
+
+  target_tbl <- target_tbl %>%
+    left_join(
+      obs_reps_tbl,
+      by = c("sample", "normalizedPerturbation")
+    )
+
+
   message(glue(
     "[powerup][OBSERVATIONS_COUNTS] target_tbl_pre_mutate rows={nrow(target_tbl)} cols={paste(colnames(target_tbl), collapse=', ')}"
   ))
@@ -1025,7 +1209,12 @@ target_tbl <- .pu_obs_counts_step(
       .data$positive_probability,
       .data$positive_prediction,
       .data$positive_probability_model_status,
-      .data$positive_probability_model_message
+      .data$positive_probability_model_message,
+      .data$obs_reps_positive_probability_mean,
+      .data$obs_reps_positive_probability_sd,
+      .data$obs_reps_positive_probability_n,
+      .data$obs_reps_positive_probability_status,
+      .data$obs_reps_positive_probability_message
     )
 )
 
@@ -1116,6 +1305,23 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
     na.rm = TRUE
   )
 
+  nContinuousPosteriorRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$posterior_mean))) &
+      is.finite(suppressWarnings(as.numeric(joined_tbl$posterior_sd))),
+    na.rm = TRUE
+  )
+
+  nObsRepsPositiveProbabilityRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$obs_reps_positive_probability_mean))),
+    na.rm = TRUE
+  )
+
+  nObsRepsPositiveProbabilitySdRows <- sum(
+    is.finite(suppressWarnings(as.numeric(joined_tbl$obs_reps_positive_probability_sd))),
+    na.rm = TRUE
+  )
+
+
   summary <- list(
     schemaVersion = 4,
     jobId = job_id,
@@ -1135,6 +1341,9 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       nMatchedRows = nrow(matched_rows_only),
       nPriorGaussianRows = nPriorGaussianRows,
       nObsLikelihoodRows = nObsLikelihoodRows,
+      nContinuousPosteriorRows = nContinuousPosteriorRows,
+      nObsRepsPositiveProbabilityRows = nObsRepsPositiveProbabilityRows,
+      nObsRepsPositiveProbabilitySdRows = nObsRepsPositiveProbabilitySdRows,
       nObservedSamples = length(observed_samples),
       nPredictedSamples = length(predicted_samples),
       nOverlappingSamplesExact = length(overlapping_samples),
@@ -1175,8 +1384,13 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       predictedOnly = head(setdiff(predicted_perts, observed_perts), 50)
     ),
     posterior = list(
-      mode = "not_precomputed_backend",
-      reason = "frontend cutoff is user-adjustable, so cutoff-specific prior/posterior must be computed dynamically",
+      mode = "continuous_posterior_columns_added",
+      reason = paste(
+        "Backend now writes additive continuous-posterior columns using either",
+        "a same-scale observation path (for example obs_reps-positive-probability",
+        "mean/sd when available) or a continuous calibration path when available.",
+        "Current KDE class-likelihood fields remain unchanged and are still written."
+      ),
       priorDistribution = list(
         family = "gaussian",
         meanColumn = "prior_pred_mean",
@@ -1195,6 +1409,36 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
         equalPriorPosteriorColumn = "obs_posterior_equal_prior",
         observationStatisticUsed = "target_z",
         model = "kde"
+      ),
+      continuousPosterior = list(
+        family = "gaussian",
+        statusColumn = "posterior_status",
+        reasonColumn = "posterior_reason",
+        meanColumn = "posterior_mean",
+        varColumn = "posterior_var",
+        sdColumn = "posterior_sd",
+        piLower95Column = "posterior_pi_lower_95",
+        piUpper95Column = "posterior_pi_upper_95",
+        probBelowCutoffColumn = "posterior_prob_below_cutoff",
+        probAboveCutoffColumn = "posterior_prob_above_cutoff",
+        probTargetEventColumn = "posterior_prob_target_event",
+        targetEventDefinitionColumn = "posterior_target_event_definition",
+        observationCalibrationModelColumn = "obs_calibration_model",
+        observationCalibrationStatusColumn = "obs_calibration_status",
+        observationCalibrationReasonColumn = "obs_calibration_reason",
+        observationCalibrationInterceptColumn = "obs_calibration_intercept",
+        observationCalibrationSlopeColumn = "obs_calibration_slope",
+        observationCalibrationResidSdColumn = "obs_calibration_resid_sd",
+        observationImpliedResponseMeanColumn = "obs_implied_response_mean",
+        observationImpliedResponseSdColumn = "obs_implied_response_sd",
+        observationSourceColumn = "posterior_observation_source",
+        observationValueColumn = "posterior_observation_value",
+        observationSdColumn = "posterior_observation_sd",
+        obsRepsMeanColumn = "obs_reps_positive_probability_mean",
+        obsRepsSdColumn = "obs_reps_positive_probability_sd",
+        obsRepsNColumn = "obs_reps_positive_probability_n",
+        obsRepsStatusColumn = "obs_reps_positive_probability_status",
+        obsRepsMessageColumn = "obs_reps_positive_probability_message"
       )
     )
   )
