@@ -77,9 +77,21 @@ powerup_write_lines <- function(path, lines) {
   if (!requireNamespace("arrow", quietly = TRUE)) {
     stop(glue::glue("[powerup] arrow R package is required to write parquet: {path}"))
   }
-  arrow::write_parquet(df, path, compression = "zstd", use_dictionary = TRUE)
+
+  df_out <- df
+
+  if (is.data.frame(df_out) && nrow(df_out) > 0) {
+    for (cn in names(df_out)) {
+      if (is.numeric(df_out[[cn]]) && !is.logical(df_out[[cn]])) {
+        df_out[[cn]] <- as.single(df_out[[cn]])
+      }
+    }
+  }
+
+  arrow::write_parquet(df_out, path, compression = "zstd", use_dictionary = TRUE)
   TRUE
 }
+
 
 
 .pu_assert_file_exists <- function(path, label) {
@@ -2431,7 +2443,7 @@ powerup_aggregate_training_shap <- function(
     perturbation = arrow::utf8(),
     cell_line = arrow::utf8(),
     feature = arrow::utf8(),
-    shap_value = arrow::float64()
+    shap_value = arrow::float32()
   )
 
   flush_part <- function() {
