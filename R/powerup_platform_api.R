@@ -950,6 +950,81 @@ powerup_preprocess <- function(
   response_df     <- .pu_coerce_numeric_cols(response_df,     id_col = "cell_line", label = "response_df")
   user_matrix     <- .pu_coerce_numeric_cols(user_matrix,     id_col = "cell_line", label = "user_matrix")
 
+  # ---- Normalize feature names for overlap matching ----
+  .pu_apply_clean_feature_names <- function(df, label, job_id) {
+    feature_cols <- setdiff(colnames(df), "cell_line")
+    if (length(feature_cols) < 1) {
+      stop(glue("[powerup][jobId={job_id}] {label} has no feature columns"))
+    }
+
+    clean_feature_cols <- .pu_clean_name_key(feature_cols)
+
+    if (any(!nzchar(clean_feature_cols))) {
+      bad <- feature_cols[!nzchar(clean_feature_cols)]
+      stop(glue(
+        "[powerup][jobId={job_id}] {label} contains feature columns that become empty after clean-name normalization: ",
+        "{paste(head(bad, 25), collapse=', ')}",
+        ifelse(length(bad) > 25, " ...", "")
+      ))
+    }
+
+    dup_tbl <- tibble::tibble(
+      original = feature_cols,
+      cleaned = clean_feature_cols
+    ) %>%
+      dplyr::count(.data$cleaned, name = "n") %>%
+      dplyr::filter(.data$n > 1)
+
+    if (nrow(dup_tbl) > 0) {
+      dup_keys <- dup_tbl$cleaned
+      dup_examples <- tibble::tibble(
+        original = feature_cols,
+        cleaned = clean_feature_cols
+      ) %>%
+        dplyr::filter(.data$cleaned %in% dup_keys) %>%
+        dplyr::arrange(.data$cleaned, .data$original)
+
+      stop(glue(
+        "[powerup][jobId={job_id}] {label} contains feature columns that collide after clean-name normalization. ",
+        "Examples: ",
+        "{paste(head(paste0(dup_examples$original, '->', dup_examples$cleaned), 25), collapse=', ')}",
+        ifelse(nrow(dup_examples) > 25, ' ...', '')
+      ))
+    }
+
+    colnames(df)[match(feature_cols, colnames(df))] <- clean_feature_cols
+
+    message(glue(
+      "[powerup][jobId={job_id}] normalized feature names for {label}: n={length(feature_cols)}"
+    ))
+
+    df
+  }
+
+  # Skip cleaning the gene epxression table as it should be already preprocessed
+  # gene_expression <- .pu_apply_clean_feature_names(
+  #   gene_expression,
+  #   label = "gene_expression",
+  #   job_id = job_id
+  # )
+
+  user_matrix <- .pu_apply_clean_feature_names(
+    user_matrix,
+    label = "user_matrix",
+    job_id = job_id
+  )
+
+  # ---- Validate overlaps ----
+  user_genes <- setdiff(colnames(user_matrix), "cell_line")
+  expr_genes <- setdiff(colnames(gene_expression), "cell_line")
+  common_genes <- intersect(user_genes, expr_genes)
+  if (length(common_genes) < 2) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Too few overlapping genes between user matrix and gene_expression ",
+      "after clean-name normalization: overlap={length(common_genes)}"
+    ))
+  }
+
   # ---- Validate overlaps ----
   user_genes <- setdiff(colnames(user_matrix), "cell_line")
   expr_genes <- setdiff(colnames(gene_expression), "cell_line")
