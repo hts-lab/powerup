@@ -1533,35 +1533,58 @@ powerup_train_models <- function(
         stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
       }
 
-      # Build per-model dataset: align outcome and features by cell_line before binding
-      train_ids_common <- intersect(rownames(feat_train), rownames(out_train))
-      test_ids_common  <- intersect(rownames(feat_test), rownames(out_test))
-
-      train_ids_common <- sort(unique(as.character(train_ids_common)))
-      test_ids_common  <- sort(unique(as.character(test_ids_common)))
+      # Build per-model dataset: align outcome and features by shared cell_line IDs,
+      # then fail loudly if row order is still not identical.
+      train_ids_common <- sort(intersect(rownames(feat_train), rownames(out_train)))
+      test_ids_common  <- sort(intersect(rownames(feat_test), rownames(out_test)))
 
       if (length(train_ids_common) < 1) {
-        stop(glue("[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_train and out_train for perturbation '{perturbation}'"))
+        stop(glue(
+          "[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_train and out_train for perturbation '{perturbation}'"
+        ))
       }
       if (length(test_ids_common) < 1) {
-        stop(glue("[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_test and out_test for perturbation '{perturbation}'"))
+        stop(glue(
+          "[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_test and out_test for perturbation '{perturbation}'"
+        ))
+      }
+
+      train_y <- out_train[train_ids_common, perturbation, drop = FALSE]
+      train_x <- feat_train[train_ids_common, , drop = FALSE]
+
+      test_y <- out_test[test_ids_common, perturbation, drop = FALSE]
+      test_x <- feat_test[test_ids_common, , drop = FALSE]
+
+      if (!identical(rownames(train_y), rownames(train_x))) {
+        first_bad_train <- which(rownames(train_y) != rownames(train_x))[1]
+        stop(glue(
+          "[powerup][jobId={job_id}] train row alignment failed for perturbation '{perturbation}'. ",
+          "first_mismatch_index={first_bad_train} ",
+          "train_y_cell_line='{rownames(train_y)[first_bad_train]}' ",
+          "train_x_cell_line='{rownames(train_x)[first_bad_train]}'"
+        ))
+      }
+
+      if (!identical(rownames(test_y), rownames(test_x))) {
+        first_bad_test <- which(rownames(test_y) != rownames(test_x))[1]
+        stop(glue(
+          "[powerup][jobId={job_id}] test row alignment failed for perturbation '{perturbation}'. ",
+          "first_mismatch_index={first_bad_test} ",
+          "test_y_cell_line='{rownames(test_y)[first_bad_test]}' ",
+          "test_x_cell_line='{rownames(test_x)[first_bad_test]}'"
+        ))
       }
 
       train_df <- cbind(
-        setNames(
-          as.data.frame(out_train[train_ids_common, perturbation, drop = FALSE]),
-          perturbation
-        ),
-        feat_train[train_ids_common, , drop = FALSE]
+        setNames(as.data.frame(train_y), perturbation),
+        train_x
       )
 
       test_df <- cbind(
-        setNames(
-          as.data.frame(out_test[test_ids_common, perturbation, drop = FALSE]),
-          perturbation
-        ),
-        feat_test[test_ids_common, , drop = FALSE]
+        setNames(as.data.frame(test_y), perturbation),
+        test_x
       )
+      
       
 
       # ---- Train Model ----
