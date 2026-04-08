@@ -1533,16 +1533,36 @@ powerup_train_models <- function(
         stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
       }
 
-      # Build per-model dataset: outcome column + all features
+      # Build per-model dataset: align outcome and features by cell_line before binding
+      train_ids_common <- intersect(rownames(feat_train), rownames(out_train))
+      test_ids_common  <- intersect(rownames(feat_test), rownames(out_test))
+
+      train_ids_common <- sort(unique(as.character(train_ids_common)))
+      test_ids_common  <- sort(unique(as.character(test_ids_common)))
+
+      if (length(train_ids_common) < 1) {
+        stop(glue("[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_train and out_train for perturbation '{perturbation}'"))
+      }
+      if (length(test_ids_common) < 1) {
+        stop(glue("[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_test and out_test for perturbation '{perturbation}'"))
+      }
+
       train_df <- cbind(
-        setNames(as.data.frame(out_train[, perturbation, drop = FALSE]), perturbation),
-        feat_train
+        setNames(
+          as.data.frame(out_train[train_ids_common, perturbation, drop = FALSE]),
+          perturbation
+        ),
+        feat_train[train_ids_common, , drop = FALSE]
       )
 
       test_df <- cbind(
-        setNames(as.data.frame(out_test[, perturbation, drop = FALSE]), perturbation),
-        feat_test
+        setNames(
+          as.data.frame(out_test[test_ids_common, perturbation, drop = FALSE]),
+          perturbation
+        ),
+        feat_test[test_ids_common, , drop = FALSE]
       )
+      
 
       # ---- Train Model ----
       fit <- make_xgb_model(
