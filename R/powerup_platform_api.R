@@ -21,6 +21,9 @@ suppressPackageStartupMessages({
 
 # ---- small utilities ----
 
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && !nzchar(x))) y else x
+
+
 powerup_dir_create <- function(path) {
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
 }
@@ -261,22 +264,52 @@ powerup_write_lines <- function(path, lines) {
 }
 
 
-.pu_select_top_var_genes <- function(user_matrix, genes, n_features) {
-  genes <- intersect(genes, colnames(user_matrix))
-  m <- as.matrix(user_matrix[, genes, drop = FALSE])
+.pu_select_top_var_genes <- function(
+  user_matrix,
+  genes,
+  n_features,
+  reference_matrix = NULL,
+  job_id = NA_character_
+) {
+  user_genes <- intersect(as.character(genes), colnames(user_matrix))
 
-  if (nrow(m) < 2) {
-    # Deterministic behavior for single-sample (or zero-row) input:
-    # variance is undefined, so explicitly set all to 0
-    vars <- rep(0, ncol(m))
-    names(vars) <- colnames(m)
+  if (length(user_genes) < 1) {
+    stop(glue("[powerup][jobId={job_id}] No overlapping genes found in user_matrix for feature selection"))
+  }
 
-    message(glue::glue(
-      "[powerup] variance computed with <2 samples; ",
-      "forcing zero variance for all features (n_samples={nrow(m)})"
-    ))
-  } else {
+
+  if (nrow(user_matrix) >= 2) {
+    # Multi-sample user input: use variances of user data directly for feature selection
+    m <- as.matrix(user_matrix[, user_genes, drop = FALSE])
     vars <- apply(m, 2, stats::var, na.rm = TRUE)
+
+    message(glue(
+      "[powerup][jobId={job_id}] top-variable feature selection source=user_matrix ",
+      "n_samples={nrow(m)} n_candidate_features={ncol(m)}"
+    ))
+  } else { 
+    # Single-sample user input: use variances from reference_matrix for feature selection (if provided), but only on overlapping genes
+    if (is.null(reference_matrix)) {
+      stop(glue(
+        "[powerup][jobId={job_id}] reference_matrix is required when feature selection is requested with <2 user samples"
+      ))
+    }
+
+    ref_genes <- intersect(user_genes, colnames(reference_matrix))
+    if (length(ref_genes) < 1) {
+      stop(glue(
+        "[powerup][jobId={job_id}] No overlapping genes found in reference_matrix for single-sample feature selection"
+      ))
+    }
+
+    m <- as.matrix(reference_matrix[, ref_genes, drop = FALSE])
+    vars <- apply(m, 2, stats::var, na.rm = TRUE)
+
+    message(glue(
+      "[powerup][jobId={job_id}] top-variable feature selection source=reference_matrix ",
+      "reason=single_user_sample user_samples={nrow(user_matrix)} ",
+      "reference_samples={nrow(reference_matrix)} n_candidate_features={ncol(m)}"
+    ))
   }
 
   vars[is.na(vars)] <- -Inf
@@ -1025,14 +1058,6 @@ powerup_preprocess <- function(
     ))
   }
 
-  # ---- Validate overlaps ----
-  user_genes <- setdiff(colnames(user_matrix), "cell_line")
-  expr_genes <- setdiff(colnames(gene_expression), "cell_line")
-  common_genes <- intersect(user_genes, expr_genes)
-  if (length(common_genes) < 2) {
-    stop(glue("[powerup][jobId={job_id}] Too few overlapping genes between user matrix and gene_expression: overlap={length(common_genes)}"))
-  }
-
   perturbations <- setdiff(colnames(response_df), "cell_line")
   if (length(perturbations) < 1) stop(glue("[powerup][jobId={job_id}] response_df has no perturbation columns"))
 
@@ -1133,15 +1158,28 @@ powerup_preprocess <- function(
       ))
     }
 
-    if (length(selected_sample_ids_used) < 2) {
+    if (length(selected_sample_ids_used) < 1) {
       message(glue(
-        "[powerup][jobId={job_id}] selected_samples_path matched fewer than 2 samples in matrix.csv; ",
-        "matched={length(selected_sample_ids_used)}. Falling back to all user samples for feature selection."
+        "[powerup][jobId={job_id}] selected_samples_path matched 0 samples in matrix.csv; ",
+        "falling back to all user samples for feature selection."
       ))
     } else {
       user_matrix_feature_source <- user_matrix %>%
         dplyr::filter(.data$cell_line %in% selected_sample_ids_used)
+
+      if (length(selected_sample_ids_used) == 1) {
+        message(glue(
+          "[powerup][jobId={job_id}] selected_samples_path matched exactly 1 sample in matrix.csv; ",
+          "feature selection will use reference variance on overlapping genes."
+        ))
+      } else {
+        message(glue(
+          "[powerup][jobId={job_id}] selected_samples_path matched {length(selected_sample_ids_used)} samples in matrix.csv; ",
+          "feature selection will use user-sample variance."
+        ))
+      }
     }
+
 
   } else {
     message(glue("[powerup][jobId={job_id}] no selected samples file provided; using all user samples for feature selection"))
@@ -1181,15 +1219,20 @@ powerup_preprocess <- function(
   } else {
     n_features_int <- max(1L, as.integer(n_features))
     selected_genes <- .pu_select_top_var_genes(
-      user_matrix_feature_source,
-      common_genes,
-      n_features_int
+      user_matrix = user_matrix_feature_source,
+      genes = common_genes,
+      n_features = n_features_int,
+      reference_matrix = gene_expression_u,
+      job_id = job_id
     )
 
     message(glue(
-      "[powerup][jobId={job_id}] top-variable feature selection used n_features={n_features_int} selected={length(selected_genes)}"
+      "[powerup][jobId={job_id}] top-variable feature selection used n_features={n_features_int} ",
+      "selected={length(selected_genes)} user_samples_for_feature_selection={nrow(user_matrix_feature_source)} ",
+      "reference_samples_available={nrow(gene_expression_u)}"
     ))
   }
+
 
   if (length(selected_genes) < 10) {
     stop(glue(
@@ -1422,9 +1465,6 @@ powerup_train_models <- function(
     out
   }
 
-  `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && !nzchar(x))) y else x
-  
-
 
 
   # ---- perturbations table is the mapping source of truth ----
@@ -1584,7 +1624,7 @@ powerup_train_models <- function(
         setNames(as.data.frame(test_y), perturbation),
         test_x
       )
-      
+
       
 
       # ---- Train Model ----
@@ -1865,7 +1905,6 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
   ))
 
 
-  `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
   # ---- Source of truth: expected models + perturbation names ----
   pert_tbl <- readr::read_csv(perturbations_path, show_col_types = FALSE, progress = FALSE)
