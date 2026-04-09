@@ -1,6 +1,6 @@
 Package: powerup
 Title: POWERUP: Predictive Oncology Workflow for Expression-driven taRgets in Underpowered Patient cohorts
-Version: 0.1.1.0069
+Version: 0.1.1.0070
 Authors@R: 
     person(given = "Mushriq",
            family = "Al-Jazrawe",
@@ -8,8 +8,7 @@ Authors@R:
            email = "mushriq@mit.edu",
            comment = c(ORCID = "0000-0002-4267-4236"))
 Description: A predictive modeling approach that harnesses large publicly available cancer functional genomics datasets to enable the derivation of novel insights and the strategic prioritization of therapeutic hypotheses for rare and understudied diseases from complex sample mixtures, offering the unique ability to pinpoint targets that selectively combat cancer cells while sparing adjacent healthy tissue in freshly procured specimens. The integration of this methodology into the design of future cancer clinical trials holds the potential to expedite the development of highly tailored therapeutic protocols, especially for rare diseases that are typically underrepresented in these public datasets.
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
