@@ -152,6 +152,23 @@ powerup_write_lines <- function(path, lines) {
   ids
 }
 
+.pu_read_reference_cell_lines <- function(path) {
+  if (is.null(path)) return(NULL)
+  if (!is.character(path) || length(path) != 1) return(NULL)
+
+  path <- trimws(path)
+  if (!nzchar(path)) return(NULL)
+  if (!file.exists(path)) return(NULL)
+
+  txt <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  ids <- unlist(strsplit(txt, "[\r\n,;]+", perl = TRUE), use.names = FALSE)
+  ids <- unique(trimws(as.character(ids)))
+  ids <- ids[nzchar(ids)]
+
+  if (length(ids) < 1) return(NULL)
+  ids
+}
+
 
 .pu_read_selected_features <- function(path) {
   if (is.null(path)) return(NULL)
@@ -952,6 +969,8 @@ powerup_preprocess <- function(
   targets = NULL,
   selected_samples_path = NULL,
   selected_features_path = NULL,
+  selected_train_cell_lines_path = NULL,
+  selected_test_cell_lines_path = NULL,
   perturbation_metadata_path = NULL,
   sensitive_cutoff = 0.75,
   resistant_cutoff = 0.25,
@@ -1047,14 +1066,14 @@ powerup_preprocess <- function(
     job_id = job_id
   )
 
-  # ---- Validate overlaps ----
+  # ---- Initial overlap validation on uploaded user matrix ----
   user_genes <- setdiff(colnames(user_matrix), "cell_line")
   expr_genes <- setdiff(colnames(gene_expression), "cell_line")
-  common_genes <- intersect(user_genes, expr_genes)
-  if (length(common_genes) < 2) {
+  initial_common_genes <- intersect(user_genes, expr_genes)
+  if (length(initial_common_genes) < 2) {
     stop(glue(
-      "[powerup][jobId={job_id}] Too few overlapping genes between user matrix and gene_expression ",
-      "after clean-name normalization: overlap={length(common_genes)}"
+      "[powerup][jobId={job_id}] Too few overlapping genes between uploaded user matrix and gene_expression ",
+      "after clean-name normalization: overlap={length(initial_common_genes)}"
     ))
   }
 
@@ -1128,22 +1147,109 @@ powerup_preprocess <- function(
   # Universe = cell_line overlap between gene_expression and response
   all_ids <- intersect(gene_expression$cell_line, response_df$cell_line)
   all_ids <- sort(unique(all_ids))
-  if (length(all_ids) < 3) stop(glue("[powerup][jobId={job_id}] Too few overlapping cell_line IDs between gene_expression and response: n={length(all_ids)}"))
+  if (length(all_ids) < 3) {
+    stop(glue("[powerup][jobId={job_id}] Too few overlapping cell_line IDs between gene_expression and response: n={length(all_ids)}"))
+  }
 
-  gene_expression_u <- gene_expression %>% dplyr::filter(.data$cell_line %in% all_ids)
-  response_u        <- response_df %>%
+  gene_expression_u <- gene_expression %>%
+    dplyr::filter(.data$cell_line %in% all_ids)
+
+  response_u <- response_df %>%
     dplyr::filter(.data$cell_line %in% all_ids) %>%
     dplyr::select(.data$cell_line, dplyr::all_of(perturbations))
 
-  # ---- Optional sample subset used ONLY for user-side feature selection ----
+  # ---- Optional explicit reference train/test IDs ----
+  selected_train_ids_raw <- .pu_read_reference_cell_lines(selected_train_cell_lines_path)
+  selected_test_ids_raw  <- .pu_read_reference_cell_lines(selected_test_cell_lines_path)
+
+  selected_train_ids_used <- intersect(selected_train_ids_raw %||% character(0), all_ids)
+  selected_test_ids_used  <- intersect(selected_test_ids_raw %||% character(0), all_ids)
+
+  selected_train_ids_missing <- setdiff(selected_train_ids_raw %||% character(0), all_ids)
+  selected_test_ids_missing  <- setdiff(selected_test_ids_raw %||% character(0), all_ids)
+
+  message(glue(
+    "[powerup][jobId={job_id}] reference train IDs provided requested={length(selected_train_ids_raw %||% character(0))} ",
+    "matched={length(selected_train_ids_used)} missing={length(selected_train_ids_missing)}"
+  ))
+  if (length(selected_train_ids_missing) > 0) {
+    message(glue(
+      "[powerup][jobId={job_id}] reference train IDs missing from reference universe: ",
+      "{paste(head(selected_train_ids_missing, 25), collapse=', ')}",
+      ifelse(length(selected_train_ids_missing) > 25, " ...", "")
+    ))
+  }
+
+  message(glue(
+    "[powerup][jobId={job_id}] reference test IDs provided requested={length(selected_test_ids_raw %||% character(0))} ",
+    "matched={length(selected_test_ids_used)} missing={length(selected_test_ids_missing)}"
+  ))
+  if (length(selected_test_ids_missing) > 0) {
+    message(glue(
+      "[powerup][jobId={job_id}] reference test IDs missing from reference universe: ",
+      "{paste(head(selected_test_ids_missing, 25), collapse=', ')}",
+      ifelse(length(selected_test_ids_missing) > 25, " ...", "")
+    ))
+  }
+
+  # ---- Final training IDs ----
+  if (length(selected_train_ids_used) < 1 && length(selected_test_ids_used) < 1) {
+    train_ids <- all_ids
+    reference_split_mode <- "default_all_reference_train"
+  } else if (length(selected_train_ids_used) > 0 && length(selected_test_ids_used) < 1) {
+    train_ids <- sort(unique(selected_train_ids_used))
+    reference_split_mode <- "explicit_train_only"
+  } else if (length(selected_train_ids_used) < 1 && length(selected_test_ids_used) > 0) {
+    train_ids <- setdiff(all_ids, selected_test_ids_used)
+    reference_split_mode <- "explicit_test_only"
+  } else {
+    train_ids <- setdiff(selected_train_ids_used, selected_test_ids_used)
+    reference_split_mode <- "explicit_train_and_test"
+  }
+
+  train_ids <- sort(unique(train_ids))
+
+  if (reference_split_mode != "default_all_reference_train" && length(train_ids) < 5) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Final training set has too few reference IDs after applying explicit train/test selection: ",
+      "n_train={length(train_ids)} mode={reference_split_mode}. Minimum required is 5."
+    ))
+  }
+
+  # ---- Build appended reference-test rows for prediction / feature-selection pool ----
+  user_genes <- setdiff(colnames(user_matrix), "cell_line")
+  appendable_test_features <- intersect(user_genes, colnames(gene_expression_u))
+
+  appended_test_matrix <- gene_expression_u %>%
+    dplyr::filter(.data$cell_line %in% selected_test_ids_used) %>%
+    dplyr::select(.data$cell_line, dplyr::all_of(appendable_test_features))
+
+  uploaded_user_matrix <- user_matrix
+
+  overlapping_prediction_ids <- intersect(uploaded_user_matrix$cell_line, appended_test_matrix$cell_line)
+  if (length(overlapping_prediction_ids) > 0) {
+    message(glue(
+      "[powerup][jobId={job_id}] reference test IDs overlapped uploaded user sample IDs; uploaded user rows take precedence. ",
+      "overlap={length(overlapping_prediction_ids)} examples={paste(head(overlapping_prediction_ids, 25), collapse=', ')}",
+      ifelse(length(overlapping_prediction_ids) > 25, ' ...', '')
+    ))
+  }
+
+  prediction_matrix_full <- dplyr::bind_rows(
+    uploaded_user_matrix,
+    appended_test_matrix
+  ) %>%
+    dplyr::distinct(.data$cell_line, .keep_all = TRUE)
+
+  # ---- Optional sample subset used ONLY for feature selection ----
   selected_sample_ids_raw <- .pu_read_selected_samples(selected_samples_path)
   selected_sample_ids_used <- character(0)
 
-  user_matrix_feature_source <- user_matrix
+  user_matrix_feature_source <- prediction_matrix_full
 
   if (!is.null(selected_sample_ids_raw) && length(selected_sample_ids_raw) > 0) {
-    selected_sample_ids_used <- intersect(selected_sample_ids_raw, user_matrix$cell_line)
-    selected_sample_ids_missing <- setdiff(selected_sample_ids_raw, user_matrix$cell_line)
+    selected_sample_ids_used <- intersect(selected_sample_ids_raw, prediction_matrix_full$cell_line)
+    selected_sample_ids_missing <- setdiff(selected_sample_ids_raw, prediction_matrix_full$cell_line)
 
     message(glue(
       "[powerup][jobId={job_id}] selected samples for feature selection provided requested={length(selected_sample_ids_raw)} ",
@@ -1152,7 +1258,7 @@ powerup_preprocess <- function(
 
     if (length(selected_sample_ids_missing) > 0) {
       message(glue(
-        "[powerup][jobId={job_id}] selected samples missing from matrix: ",
+        "[powerup][jobId={job_id}] selected samples missing from combined prediction cohort: ",
         "{paste(head(selected_sample_ids_missing, 25), collapse=', ')}",
         ifelse(length(selected_sample_ids_missing) > 25, " ...", "")
       ))
@@ -1160,29 +1266,41 @@ powerup_preprocess <- function(
 
     if (length(selected_sample_ids_used) < 1) {
       message(glue(
-        "[powerup][jobId={job_id}] selected_samples_path matched 0 samples in matrix.csv; ",
-        "falling back to all user samples for feature selection."
+        "[powerup][jobId={job_id}] selected_samples_path matched 0 rows in the combined prediction cohort; ",
+        "falling back to all prediction rows for feature selection."
       ))
     } else {
-      user_matrix_feature_source <- user_matrix %>%
+      user_matrix_feature_source <- prediction_matrix_full %>%
         dplyr::filter(.data$cell_line %in% selected_sample_ids_used)
 
       if (length(selected_sample_ids_used) == 1) {
         message(glue(
-          "[powerup][jobId={job_id}] selected_samples_path matched exactly 1 sample in matrix.csv; ",
+          "[powerup][jobId={job_id}] selected_samples_path matched exactly 1 row in the combined prediction cohort; ",
           "feature selection will use reference variance on overlapping genes."
         ))
       } else {
         message(glue(
-          "[powerup][jobId={job_id}] selected_samples_path matched {length(selected_sample_ids_used)} samples in matrix.csv; ",
-          "feature selection will use user-sample variance."
+          "[powerup][jobId={job_id}] selected_samples_path matched {length(selected_sample_ids_used)} rows in the combined prediction cohort; ",
+          "feature selection will use user/prediction-cohort variance."
         ))
       }
     }
-
-
   } else {
-    message(glue("[powerup][jobId={job_id}] no selected samples file provided; using all user samples for feature selection"))
+    message(glue(
+      "[powerup][jobId={job_id}] no selected samples file provided; using all combined prediction rows for feature selection"
+    ))
+  }
+
+  # Recompute overlap against the combined prediction pool for feature selection / final user features
+  prediction_genes <- setdiff(colnames(prediction_matrix_full), "cell_line")
+  expr_genes <- setdiff(colnames(gene_expression_u), "cell_line")
+  common_genes <- intersect(prediction_genes, expr_genes)
+
+  if (length(common_genes) < 2) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Too few overlapping genes between combined prediction cohort and gene_expression ",
+      "after clean-name normalization: overlap={length(common_genes)}"
+    ))
   }
 
   # ---- Feature selection: either explicit selected feature list or top variable genes ----
@@ -1244,10 +1362,16 @@ powerup_preprocess <- function(
   # Build feature tables
   # IMPORTANT:
   # - features_all always comes from the platform training universe
-  # - features_user always keeps ALL uploaded user samples
-  #   so predictions / SHAP still run on all samples
-  features_all <- gene_expression_u %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
-  features_user <- user_matrix %>% dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
+  # - features_user keeps ALL uploaded user samples
+  # - if explicit reference test IDs were provided, they are appended into features_user
+  #   so downstream predictions run on one unified prediction cohort
+  features_all <- gene_expression_u %>%
+    dplyr::filter(.data$cell_line %in% train_ids) %>%
+    dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
+
+
+  features_user <- prediction_matrix_full %>%
+    dplyr::select(.data$cell_line, dplyr::all_of(selected_genes))
 
   # ---- Deterministic perturbations table + model keys ----
   perturbations <- unique(as.character(perturbations))
@@ -1279,42 +1403,21 @@ powerup_preprocess <- function(
     }
   }
 
-  # ---- Deterministic split (global test set) ----
-  split <- .pu_build_split(
-    seed_int = seed_int,
-    response_u = response_u,
-    perturbations = perturbations,
-    sensitive_cutoff = sensitive_cutoff,
-    resistant_cutoff = resistant_cutoff,
-    n_per_class = 1L
-  )
+  # ---- Materialize explicit training set + unified prediction cohort ----
+  outcomes_train <- response_u %>%
+    dplyr::filter(.data$cell_line %in% train_ids)
 
-  train_ids <- split$train_ids
-  test_ids  <- split$test_ids
-
-  # Materialize outcomes/features by split
-  outcomes_train <- response_u %>% dplyr::filter(.data$cell_line %in% train_ids)
-  outcomes_test  <- response_u %>% dplyr::filter(.data$cell_line %in% test_ids)
-
-  features_train <- features_all %>% dplyr::filter(.data$cell_line %in% train_ids)
-  features_test  <- features_all %>% dplyr::filter(.data$cell_line %in% test_ids)
+  features_train <- features_all
 
   # ---- Write artifacts (stable filenames) ----
   readr::write_csv(perturbations_tbl, file.path(out_preprocess_dir, "perturbations.csv"))
-
-  # Better split layout ONLY (no legacy wide tables)
   readr::write_csv(features_train, file.path(out_preprocess_dir, "features_train.csv"))
-  readr::write_csv(features_test,  file.path(out_preprocess_dir, "features_test.csv"))
   readr::write_csv(features_user,  file.path(out_preprocess_dir, "features_user.csv"))
   readr::write_csv(outcomes_train, file.path(out_preprocess_dir, "outcomes_train.csv"))
-  readr::write_csv(outcomes_test,  file.path(out_preprocess_dir, "outcomes_test.csv"))
-
-  # split.json
-  powerup_write_json(file.path(out_preprocess_dir, "split.json"), split$split_json)
 
   # manifest.json (minimum required)
   manifest <- list(
-    schemaVersion = 1,
+    schemaVersion = 2,
     jobId = job_id,
     createdAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
     seed = seed_int,
@@ -1324,8 +1427,9 @@ powerup_preprocess <- function(
       totalModels = length(perturbations),
       nFeatures = length(selected_genes),
       nTrain = length(train_ids),
-      nTest = length(test_ids),
-      nUser = nrow(features_user)
+      nUserUploaded = nrow(user_matrix),
+      nReferenceTestAppended = length(selected_test_ids_used),
+      nUserPrediction = nrow(features_user)
     ),
     selectedSamplesForFeatureSelection = list(
       provided = !is.null(selected_sample_ids_raw) && length(selected_sample_ids_raw) > 0,
@@ -1343,6 +1447,27 @@ powerup_preprocess <- function(
       used = length(selected_features_used),
       missing = length(selected_features_missing)
     ),
+    referenceCellLineSelection = list(
+      mode = reference_split_mode,
+      trainIds = list(
+        provided = !is.null(selected_train_ids_raw) && length(selected_train_ids_raw) > 0,
+        path = if (!is.null(selected_train_cell_lines_path) &&
+                   is.character(selected_train_cell_lines_path) &&
+                   nzchar(trimws(selected_train_cell_lines_path))) basename(trimws(selected_train_cell_lines_path)) else NULL,
+        requested = length(selected_train_ids_raw %||% character(0)),
+        used = length(selected_train_ids_used),
+        missing = length(selected_train_ids_missing)
+      ),
+      testIds = list(
+        provided = !is.null(selected_test_ids_raw) && length(selected_test_ids_raw) > 0,
+        path = if (!is.null(selected_test_cell_lines_path) &&
+                   is.character(selected_test_cell_lines_path) &&
+                   nzchar(trimws(selected_test_cell_lines_path))) basename(trimws(selected_test_cell_lines_path)) else NULL,
+        requested = length(selected_test_ids_raw %||% character(0)),
+        used = length(selected_test_ids_used),
+        missing = length(selected_test_ids_missing)
+      )
+    ),
     perturbationMetadata = list(
       provided = !is.null(perturbation_metadata_path) &&
         is.character(perturbation_metadata_path) &&
@@ -1356,20 +1481,24 @@ powerup_preprocess <- function(
     artifacts = list(
       perturbationsCsv = "perturbations.csv",
       featuresTrainCsv = "features_train.csv",
-      featuresTestCsv = "features_test.csv",
       featuresUserCsv = "features_user.csv",
-      outcomesTrainCsv = "outcomes_train.csv",
-      outcomesTestCsv = "outcomes_test.csv",
-      splitJson = "split.json"
+      outcomesTrainCsv = "outcomes_train.csv"
     ),
     thresholds = list(
       sensitive = sensitive_cutoff,
       resistant = resistant_cutoff
     )
   )
+
   powerup_write_json(file.path(out_preprocess_dir, "manifest.json"), manifest)
 
-  message(glue("[powerup][jobId={job_id}] PREPROCESS done models={length(perturbations)} features={length(selected_genes)} train={length(train_ids)} test={length(test_ids)} user={nrow(features_user)}"))
+  message(glue(
+    "[powerup][jobId={job_id}] PREPROCESS done models={length(perturbations)} ",
+    "features={length(selected_genes)} train={length(train_ids)} ",
+    "uploaded_user={nrow(user_matrix)} appended_reference_test={length(selected_test_ids_used)} ",
+    "prediction_rows={nrow(features_user)} mode={reference_split_mode}"
+  ))
+
   invisible(TRUE)
 }
 
@@ -1507,33 +1636,28 @@ powerup_train_models <- function(
   message(glue("[powerup][jobId={job_id}] key_map sample:\n{paste(capture.output(print(utils::head(key_map, 10))), collapse='\n')}"))
 
 
-
-  # ---- Split layout ONLY ----
-  # NOTE: train_set_path/test_set_path/user_samples_path are retained for signature compatibility,
-  # but we interpret them as anchors to find split-layout artifacts in the same directory.
+  # ---- Explicit training layout + unified prediction cohort ----
+  # NOTE: test_set_path is retained for signature compatibility, but no longer used.
   features_train_path <- file.path(dirname(train_set_path), "features_train.csv")
-  features_test_path  <- file.path(dirname(test_set_path),  "features_test.csv")
   features_user_path  <- file.path(dirname(user_samples_path), "features_user.csv")
   outcomes_train_path <- file.path(dirname(train_set_path), "outcomes_train.csv")
-  outcomes_test_path  <- file.path(dirname(test_set_path),  "outcomes_test.csv")
 
   .pu_assert_file_exists(features_train_path, "features_train.csv")
-  .pu_assert_file_exists(features_test_path, "features_test.csv")
   .pu_assert_file_exists(features_user_path, "features_user.csv")
   .pu_assert_file_exists(outcomes_train_path, "outcomes_train.csv")
-  .pu_assert_file_exists(outcomes_test_path, "outcomes_test.csv")
 
-  message(glue("[powerup][jobId={job_id}] Using split layout ONLY (features_* + outcomes_* with column-pruning)"))
+  message(glue(
+    "[powerup][jobId={job_id}] Using explicit training layout (features_train.csv + outcomes_train.csv + features_user.csv)"
+  ))
 
-  # Features (shared across all models)
+  # Features
   feat_train <- readr::read_csv(features_train_path, show_col_types = FALSE, progress = FALSE) %>%
     tibble::column_to_rownames("cell_line")
-  feat_test <- readr::read_csv(features_test_path, show_col_types = FALSE, progress = FALSE) %>%
-    tibble::column_to_rownames("cell_line")
+
   user_df <- readr::read_csv(features_user_path, show_col_types = FALSE, progress = FALSE) %>%
     tibble::column_to_rownames("cell_line")
 
-  # Outcomes: read only the needed columns for this shard (cell_line + perturbations in shard)
+  # Outcomes: read only the needed columns for this shard
   needed_outcomes <- unique(key_map$perturbation)
 
   out_train_tbl <- data.table::fread(
@@ -1541,14 +1665,10 @@ powerup_train_models <- function(
     select = c("cell_line", needed_outcomes),
     data.table = FALSE
   )
-  out_test_tbl <- data.table::fread(
-    outcomes_test_path,
-    select = c("cell_line", needed_outcomes),
-    data.table = FALSE
-  )
 
-  out_train <- out_train_tbl %>% tibble::column_to_rownames("cell_line")
-  out_test  <- out_test_tbl  %>% tibble::column_to_rownames("cell_line")
+  out_train <- out_train_tbl %>%
+    tibble::column_to_rownames("cell_line")
+
 
   # We train each model and write artifacts per modelKey
   total <- length(model_keys)
@@ -1569,31 +1689,19 @@ powerup_train_models <- function(
       if (!(perturbation %in% colnames(out_train))) {
         stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_train.csv"))
       }
-      if (!(perturbation %in% colnames(out_test))) {
-        stop(glue("[powerup][jobId={job_id}] Missing outcome column '{perturbation}' in outcomes_test.csv"))
-      }
 
-      # Build per-model dataset: align outcome and features by shared cell_line IDs,
+      # Build per-model training dataset: align outcome and features by shared cell_line IDs,
       # then fail loudly if row order is still not identical.
       train_ids_common <- sort(intersect(rownames(feat_train), rownames(out_train)))
-      test_ids_common  <- sort(intersect(rownames(feat_test), rownames(out_test)))
 
       if (length(train_ids_common) < 1) {
         stop(glue(
           "[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_train and out_train for perturbation '{perturbation}'"
         ))
       }
-      if (length(test_ids_common) < 1) {
-        stop(glue(
-          "[powerup][jobId={job_id}] No overlapping cell_line IDs between feat_test and out_test for perturbation '{perturbation}'"
-        ))
-      }
 
       train_y <- out_train[train_ids_common, perturbation, drop = FALSE]
       train_x <- feat_train[train_ids_common, , drop = FALSE]
-
-      test_y <- out_test[test_ids_common, perturbation, drop = FALSE]
-      test_x <- feat_test[test_ids_common, , drop = FALSE]
 
       if (!identical(rownames(train_y), rownames(train_x))) {
         first_bad_train <- which(rownames(train_y) != rownames(train_x))[1]
@@ -1605,24 +1713,9 @@ powerup_train_models <- function(
         ))
       }
 
-      if (!identical(rownames(test_y), rownames(test_x))) {
-        first_bad_test <- which(rownames(test_y) != rownames(test_x))[1]
-        stop(glue(
-          "[powerup][jobId={job_id}] test row alignment failed for perturbation '{perturbation}'. ",
-          "first_mismatch_index={first_bad_test} ",
-          "test_y_cell_line='{rownames(test_y)[first_bad_test]}' ",
-          "test_x_cell_line='{rownames(test_x)[first_bad_test]}'"
-        ))
-      }
-
       train_df <- cbind(
         setNames(as.data.frame(train_y), perturbation),
         train_x
-      )
-
-      test_df <- cbind(
-        setNames(as.data.frame(test_y), perturbation),
-        test_x
       )
 
       
@@ -1668,60 +1761,23 @@ powerup_train_models <- function(
       powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
       # ---- Make Predictions ----
-      # pred_test.csv: predictions on held-out test set using the final trained model (if present).
-      # pred_user.csv: predictions on user's samples using the final trained model (if present).
-      # shap_user.csv: SHAP explanation values for user's sample predictions.
+      # pred_test.csv: retained as an empty compatibility artifact.
+      # pred_user.csv: predictions on the unified prediction cohort
+      #                (all uploaded user samples + optional appended reference test rows).
+      # shap_user.parquet: SHAP explanation values for unified prediction-cohort predictions.
       if (!is.null(fit$model)) {
 
         # -----------------------------
         # Stage-tagged prediction calls
-        # (logging-only; no behavior changes)
         # -----------------------------
         stage <- "INIT"
-
-        fit_test <- NULL
         fit_user <- NULL
 
-        # 1) Test predictions
-        stage <- "PREDICT_TEST: make_new_data_predictions(test_df)"
-        fit_test <- tryCatch({
-          make_new_data_predictions(
-            model = fit,
-            name = perturbation,
-            indx = i,
-            total = total,
-            new_data = test_df
-          )
-        }, error = function(e) {
-          tr <- .pu_capture_traces()
-          msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
-          message(msg)
-          if (nzchar(tr$traceback %||% "")) message(glue("[powerup][jobId={job_id}] {stage} traceback:\n{tr$traceback}"))
-          if (nzchar(tr$calls %||% "")) message(glue("[powerup][jobId={job_id}] {stage} calls:\n{tr$calls}"))
-          if (nzchar(tr$rlang_last_trace %||% "")) message(glue("[powerup][jobId={job_id}] {stage} rlang::last_trace:\n{tr$rlang_last_trace}"))
-          stop(e)
-        })
+        # pred_test.csv is retained for compatibility with downstream finalize/UI paths,
+        # but explicit internal test prediction is no longer part of the contract.
+        readr::write_csv(tibble::tibble(), file.path(model_out_dir, "pred_test.csv"))
 
-        pred_test_tbl <- tibble::tibble(
-          cell_line = names(fit_test$new_data$pred_mean),
-          pred = as.numeric(fit_test$new_data$pred_mean),                 # legacy-compatible alias
-          pred_error = as.numeric(fit_test$new_data$pred_sd),             # legacy-compatible alias
-          pred_mean = as.numeric(fit_test$new_data$pred_mean),
-          pred_var = as.numeric(fit_test$new_data$pred_var),
-          pred_sd = as.numeric(fit_test$new_data$pred_sd),
-          pred_log_var = as.numeric(fit_test$new_data$pred_log_var),
-          pred_pi_lower_95 = as.numeric(fit_test$new_data$pred_pi_lower_95),
-          pred_pi_upper_95 = as.numeric(fit_test$new_data$pred_pi_upper_95),
-          response_cutoff = as.numeric(fit_test$new_data$response_cutoff),
-          decreasing = as.logical(fit_test$new_data$decreasing),
-          prob_below_cutoff = as.numeric(fit_test$new_data$prob_below_cutoff),
-          prob_above_cutoff = as.numeric(fit_test$new_data$prob_above_cutoff),
-          prob_target_event = as.numeric(fit_test$new_data$prob_target_event),
-          target_event_definition = as.character(fit_test$new_data$target_event_definition)
-        )
-        readr::write_csv(pred_test_tbl, file.path(model_out_dir, "pred_test.csv"))
-
-        # 2) User predictions
+        # User / unified prediction cohort predictions
         stage <- "PREDICT_USER: make_new_data_predictions(user_df)"
         fit_user <- tryCatch({
           make_new_data_predictions(
@@ -1780,10 +1836,9 @@ powerup_train_models <- function(
         #readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
         .pu_write_parquet_required(shap_user_df, file.path(model_out_dir, "shap_user.parquet"))
 
-        rm(fit_test, fit_user)
+        rm(fit_user)
         rm(shap_user_df)
         gc()
-
 
         # 4) TRAINING SHAP extraction (same contract as SHAP_USER)
         stage <- "SHAP_TRAIN: extract fit$shap_values"
