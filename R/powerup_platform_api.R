@@ -21,7 +21,12 @@ suppressPackageStartupMessages({
 
 # ---- small utilities ----
 
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && !nzchar(x))) y else x
+`%||%` <- function(x, y) {
+  if (is.null(x)) return(y)
+  if (length(x) == 0) return(y)
+  if (is.character(x) && length(x) == 1 && !nzchar(x)) return(y)
+  x
+}
 
 
 powerup_dir_create <- function(path) {
