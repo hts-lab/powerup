@@ -988,14 +988,37 @@ powerup_preprocess <- function(
 
   message(glue("[powerup][jobId={job_id}] PREPROCESS start data_version={data_version} response_set={response_set} seed={seed_int}"))
 
-  # ---- Read inputs (strict) ----
+  # ---- Read inputs (matrix optional; prediction cohort must still exist) ----
   .pu_assert_file_exists(gene_expression_path, "gene_expression_path")
   .pu_assert_file_exists(response_path, "response_path")
-  .pu_assert_file_exists(matrix_path, "matrix_path")
+
+  matrix_path_is_present <- (
+    !is.null(matrix_path) &&
+    is.character(matrix_path) &&
+    length(matrix_path) == 1 &&
+    nzchar(trimws(matrix_path)) &&
+    file.exists(trimws(matrix_path))
+  )
+
+  if (!matrix_path_is_present) {
+    message(glue(
+      "[powerup][jobId={job_id}] no uploaded matrix_path provided; prediction cohort must come from selected_test_cell_lines_path"
+    ))
+  } else {
+    .pu_assert_file_exists(matrix_path, "matrix_path")
+    message(glue(
+      "[powerup][jobId={job_id}] uploaded matrix_path detected: {basename(trimws(matrix_path))}"
+    ))
+  }
 
   gene_expression <- readr::read_csv(gene_expression_path, show_col_types = FALSE, progress = FALSE)
   response_df     <- readr::read_csv(response_path, show_col_types = FALSE, progress = FALSE)
-  user_matrix     <- readr::read_csv(matrix_path, show_col_types = FALSE, progress = FALSE)
+
+  if (matrix_path_is_present) {
+    user_matrix <- readr::read_csv(trimws(matrix_path), show_col_types = FALSE, progress = FALSE)
+  } else {
+    user_matrix <- tibble::tibble(cell_line = character(0))
+  }
 
   # Normalize ID column name to cell_line (if first col not named)
   gene_expression <- .pu_normalize_id_col(gene_expression, "cell_line")
@@ -1005,7 +1028,9 @@ powerup_preprocess <- function(
   # Coerce numerics (fail fast if non-numeric)
   gene_expression <- .pu_coerce_numeric_cols(gene_expression, id_col = "cell_line", label = "gene_expression")
   response_df     <- .pu_coerce_numeric_cols(response_df,     id_col = "cell_line", label = "response_df")
-  user_matrix     <- .pu_coerce_numeric_cols(user_matrix,     id_col = "cell_line", label = "user_matrix")
+  if (ncol(user_matrix) > 1) {
+    user_matrix <- .pu_coerce_numeric_cols(user_matrix, id_col = "cell_line", label = "user_matrix")
+  }
 
   # ---- Normalize feature names for overlap matching ----
   .pu_apply_clean_feature_names <- function(df, label, job_id) {
@@ -1065,22 +1090,36 @@ powerup_preprocess <- function(
   #   job_id = job_id
   # )
 
-  user_matrix <- .pu_apply_clean_feature_names(
-    user_matrix,
-    label = "user_matrix",
-    job_id = job_id
-  )
-
-  # ---- Initial overlap validation on uploaded user matrix ----
-  user_genes <- setdiff(colnames(user_matrix), "cell_line")
-  expr_genes <- setdiff(colnames(gene_expression), "cell_line")
-  initial_common_genes <- intersect(user_genes, expr_genes)
-  if (length(initial_common_genes) < 2) {
-    stop(glue(
-      "[powerup][jobId={job_id}] Too few overlapping genes between uploaded user matrix and gene_expression ",
-      "after clean-name normalization: overlap={length(initial_common_genes)}"
+  if (ncol(user_matrix) > 1) {
+    user_matrix <- .pu_apply_clean_feature_names(
+      user_matrix,
+      label = "user_matrix",
+      job_id = job_id
+    )
+  } else {
+    message(glue(
+      "[powerup][jobId={job_id}] no uploaded user matrix features present; skipping user_matrix feature-name normalization"
     ))
   }
+
+  # ---- Initial overlap validation on uploaded user matrix (only if provided) ----
+  uploaded_user_genes <- setdiff(colnames(user_matrix), "cell_line")
+  expr_genes <- setdiff(colnames(gene_expression), "cell_line")
+  initial_common_genes <- intersect(uploaded_user_genes, expr_genes)
+
+  if (matrix_path_is_present) {
+    if (length(initial_common_genes) < 2) {
+      stop(glue(
+        "[powerup][jobId={job_id}] Too few overlapping genes between uploaded user matrix and gene_expression ",
+        "after clean-name normalization: overlap={length(initial_common_genes)}"
+      ))
+    }
+  } else {
+    message(glue(
+      "[powerup][jobId={job_id}] matrix not provided; initial uploaded-matrix overlap check skipped"
+    ))
+  }
+
 
   perturbations <- setdiff(colnames(response_df), "cell_line")
   if (length(perturbations) < 1) stop(glue("[powerup][jobId={job_id}] response_df has no perturbation columns"))
@@ -1196,6 +1235,12 @@ powerup_preprocess <- function(
       ifelse(length(selected_test_ids_missing) > 25, " ...", "")
     ))
   }
+  if (!matrix_path_is_present && length(selected_test_ids_used) < 1) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Invalid prediction cohort: matrix_path is missing and selected_test_cell_lines_path matched 0 reference IDs. ",
+      "Provide an uploaded matrix, selected_test_cell_lines_path, or both."
+    ))
+  }
 
   # ---- Final training IDs ----
   if (length(selected_train_ids_used) < 1 && length(selected_test_ids_used) < 1) {
@@ -1221,15 +1266,38 @@ powerup_preprocess <- function(
     ))
   }
 
-  # ---- Build appended reference-test rows for prediction / feature-selection pool ----
-  user_genes <- setdiff(colnames(user_matrix), "cell_line")
-  appendable_test_features <- intersect(user_genes, colnames(gene_expression_u))
+  # ---- Build unified prediction cohort (uploaded matrix + appended reference test IDs) ----
+  uploaded_user_matrix <- user_matrix
+
+  uploaded_prediction_genes <- setdiff(colnames(uploaded_user_matrix), "cell_line")
+  reference_prediction_genes <- setdiff(colnames(gene_expression_u), "cell_line")
+
+  if (length(uploaded_prediction_genes) > 0) {
+    prediction_feature_candidates <- intersect(uploaded_prediction_genes, reference_prediction_genes)
+    prediction_feature_source <- "uploaded_matrix_overlap"
+  } else {
+    prediction_feature_candidates <- reference_prediction_genes
+    prediction_feature_source <- "reference_test_only"
+  }
+
+  if (length(prediction_feature_candidates) < 2) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Too few usable features for prediction cohort construction: ",
+      "n_candidates={length(prediction_feature_candidates)} source={prediction_feature_source}"
+    ))
+  }
 
   appended_test_matrix <- gene_expression_u %>%
     dplyr::filter(.data$cell_line %in% selected_test_ids_used) %>%
-    dplyr::select(.data$cell_line, dplyr::all_of(appendable_test_features))
+    dplyr::select(.data$cell_line, dplyr::all_of(prediction_feature_candidates))
 
-  uploaded_user_matrix <- user_matrix
+  if (nrow(uploaded_user_matrix) > 0) {
+    uploaded_user_matrix <- uploaded_user_matrix %>%
+      dplyr::select(.data$cell_line, dplyr::all_of(prediction_feature_candidates))
+  } else {
+    uploaded_user_matrix <- tibble::tibble(cell_line = character(0)) %>%
+      dplyr::select(.data$cell_line)
+  }
 
   overlapping_prediction_ids <- intersect(uploaded_user_matrix$cell_line, appended_test_matrix$cell_line)
   if (length(overlapping_prediction_ids) > 0) {
@@ -1245,6 +1313,18 @@ powerup_preprocess <- function(
     appended_test_matrix
   ) %>%
     dplyr::distinct(.data$cell_line, .keep_all = TRUE)
+
+  if (nrow(prediction_matrix_full) < 1) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Prediction cohort is empty after combining uploaded matrix rows and selected reference test IDs."
+    ))
+  }
+
+  message(glue(
+    "[powerup][jobId={job_id}] unified prediction cohort built source={prediction_feature_source} ",
+    "n_uploaded={nrow(uploaded_user_matrix)} n_reference_test_appended={nrow(appended_test_matrix)} ",
+    "n_prediction_total={nrow(prediction_matrix_full)} n_features={length(prediction_feature_candidates)}"
+  ))
 
   # ---- Optional sample subset used ONLY for feature selection ----
   selected_sample_ids_raw <- .pu_read_selected_samples(selected_samples_path)
@@ -1296,17 +1376,24 @@ powerup_preprocess <- function(
     ))
   }
 
-  # Recompute overlap against the combined prediction pool for feature selection / final user features
+  # Recompute overlap against the unified prediction cohort for feature selection / final user features
   prediction_genes <- setdiff(colnames(prediction_matrix_full), "cell_line")
   expr_genes <- setdiff(colnames(gene_expression_u), "cell_line")
   common_genes <- intersect(prediction_genes, expr_genes)
 
+  if (nrow(prediction_matrix_full) < 1) {
+    stop(glue(
+      "[powerup][jobId={job_id}] Prediction cohort is empty before feature selection."
+    ))
+  }
+
   if (length(common_genes) < 2) {
     stop(glue(
-      "[powerup][jobId={job_id}] Too few overlapping genes between combined prediction cohort and gene_expression ",
+      "[powerup][jobId={job_id}] Too few overlapping genes between unified prediction cohort and gene_expression ",
       "after clean-name normalization: overlap={length(common_genes)}"
     ))
   }
+
 
   # ---- Feature selection: either explicit selected feature list or top variable genes ----
   selected_features_raw <- .pu_read_selected_features(selected_features_path)
@@ -1433,8 +1520,13 @@ powerup_preprocess <- function(
       nFeatures = length(selected_genes),
       nTrain = length(train_ids),
       nUserUploaded = nrow(user_matrix),
-      nReferenceTestAppended = length(selected_test_ids_used),
+      nReferenceTestAppended = nrow(appended_test_matrix),
       nUserPrediction = nrow(features_user)
+    ),
+    predictionCohort = list(
+      matrixProvided = matrix_path_is_present,
+      matrixPath = if (matrix_path_is_present) basename(trimws(matrix_path)) else NULL,
+      featureSource = prediction_feature_source
     ),
     selectedSamplesForFeatureSelection = list(
       provided = !is.null(selected_sample_ids_raw) && length(selected_sample_ids_raw) > 0,
@@ -1500,7 +1592,7 @@ powerup_preprocess <- function(
   message(glue(
     "[powerup][jobId={job_id}] PREPROCESS done models={length(perturbations)} ",
     "features={length(selected_genes)} train={length(train_ids)} ",
-    "uploaded_user={nrow(user_matrix)} appended_reference_test={length(selected_test_ids_used)} ",
+    "uploaded_user={nrow(user_matrix)} appended_reference_test={nrow(appended_test_matrix)} ",
     "prediction_rows={nrow(features_user)} mode={reference_split_mode}"
   ))
 
