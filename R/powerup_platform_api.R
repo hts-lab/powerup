@@ -101,6 +101,29 @@ powerup_write_lines <- function(path, lines) {
 }
 
 
+.pu_read_csv_robust <- function(path, label, job_id = NA_character_) {
+  .pu_assert_file_exists(path, label)
+
+  message(glue(
+    "[powerup][jobId={job_id}] reading {label} with data.table::fread path={path}"
+  ))
+
+  out <- tryCatch(
+    data.table::fread(
+      input = path,
+      data.table = FALSE,
+      showProgress = FALSE,
+      check.names = FALSE
+    ),
+    error = function(e) {
+      stop(glue(
+        "[powerup][jobId={job_id}] failed reading {label} via data.table::fread: {conditionMessage(e)}"
+      ))
+    }
+  )
+
+  tibble::as_tibble(out)
+}
 
 .pu_assert_file_exists <- function(path, label) {
   if (!is.character(path) || length(path) != 1 || nchar(path) < 1) {
@@ -1011,14 +1034,28 @@ powerup_preprocess <- function(
     ))
   }
 
-  gene_expression <- readr::read_csv(gene_expression_path, show_col_types = FALSE, progress = FALSE)
-  response_df     <- readr::read_csv(response_path, show_col_types = FALSE, progress = FALSE)
+gene_expression <- .pu_read_csv_robust(
+  gene_expression_path,
+  label = "gene_expression_path",
+  job_id = job_id
+)
 
-  if (matrix_path_is_present) {
-    user_matrix <- readr::read_csv(trimws(matrix_path), show_col_types = FALSE, progress = FALSE)
-  } else {
-    user_matrix <- tibble::tibble(cell_line = character(0))
-  }
+response_df <- .pu_read_csv_robust(
+  response_path,
+  label = "response_path",
+  job_id = job_id
+)
+
+if (matrix_path_is_present) {
+  user_matrix <- .pu_read_csv_robust(
+    trimws(matrix_path),
+    label = "matrix_path",
+    job_id = job_id
+  )
+} else {
+  user_matrix <- tibble::tibble(cell_line = character(0))
+}
+
 
   # Normalize ID column name to cell_line (if first col not named)
   gene_expression <- .pu_normalize_id_col(gene_expression, "cell_line")
