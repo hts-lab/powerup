@@ -1814,6 +1814,8 @@ powerup_train_models <- function(
     model_out_dir <- file.path(out_models_dir, mk)
     powerup_dir_create(model_out_dir)
 
+    train_samples_non_missing <- NA_integer_
+
     # Per-model guardrails: never let a single failure kill the shard.
     # We still write model artifacts with error details so the platform can proceed.
     tryCatch({
@@ -1852,7 +1854,16 @@ powerup_train_models <- function(
         train_x
       )
 
-      
+      # Number of reference training samples actually usable for this perturbation.
+      # This matches the effective modeling universe after removing missing outcome rows.
+      train_samples_non_missing <- sum(!is.na(train_df[[perturbation]]))
+
+      if (train_samples_non_missing < 1) {
+        stop(glue(
+          "[powerup][jobId={job_id}] No non-missing training outcomes for perturbation '{perturbation}'"
+        ))
+      }
+
 
       # ---- Train Model ----
       fit <- make_xgb_model(
@@ -1886,6 +1897,7 @@ powerup_train_models <- function(
         jobId = job_id,
         modelKey = mk,
         perturbation = perturbation,
+        training_samples = as.integer(train_samples_non_missing),
         mean_r = if (!is.null(fit$scores)) mean(fit$scores, na.rm = TRUE) else NA_real_,
         mean_r2 = if (!is.null(fit$scores_R2)) mean(fit$scores_R2, na.rm = TRUE) else NA_real_,
         mean_rmse = if (!is.null(fit$scores_rmse)) mean(fit$scores_rmse, na.rm = TRUE) else NA_real_,
@@ -2030,6 +2042,7 @@ powerup_train_models <- function(
         jobId = job_id,
         modelKey = mk,
         perturbation = perturbation,
+        training_samples = as.integer(train_samples_non_missing),
         mean_r = NA_real_,
         mean_r2 = NA_real_,
         mean_rmse = NA_real_,
@@ -2161,6 +2174,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
     mean_r2 <- NA_real_
     mean_rmse <- NA_real_
     n_scores <- 0L
+    training_samples <- NA_integer_
     skipped <- TRUE
     errorType <- NA_character_
     errorMessage <- NA_character_
@@ -2188,6 +2202,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         mean_r2 <- suppressWarnings(as.numeric(obj$mean_r2 %||% NA_real_))
         mean_rmse <- suppressWarnings(as.numeric(obj$mean_rmse %||% NA_real_))
         n_scores <- suppressWarnings(as.integer(obj$n_scores %||% 0L))
+        training_samples <- suppressWarnings(as.integer(obj$training_samples %||% NA_integer_))
         skipped <- isTRUE(obj$skipped %||% FALSE)
 
         if (!is.null(obj$error)) {
@@ -2221,6 +2236,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       mean_r2 = mean_r2,
       mean_rmse = mean_rmse,
       n_scores = n_scores,
+      training_samples = training_samples,
       errorType = errorType,
       errorMessage = errorMessage,
       metricsPath = glue("{model_dir_gcs}/metrics.json"),
@@ -2257,6 +2273,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         mean_r2 = NA_real_,
         mean_rmse = NA_real_,
         n_scores = 0L,
+        training_samples = NA_integer_,
         errorType = "MissingMetrics",
         errorMessage = "metrics.json not found locally for this modelKey",
         metricsPath = glue("{model_dir_gcs}/metrics.json"),
