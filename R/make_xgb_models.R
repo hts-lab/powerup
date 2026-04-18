@@ -433,6 +433,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     cor_num = cor_n_features
   )
 
+  n_features_used <- ncol(model_data$original_data) - 2L
+
   # Step 2: Define parameters
   model_params <- prepare_model_params(data = model_data, xgb_params = xgb_params)
 
@@ -584,6 +586,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
   output <- list()
   output$perturbation_name <- perturbation
+  output$n_features_used <- n_features_used
   output$scores <- scores
   output$scores_R2 <- scores_R2
   output$scores_rmse <- scores_rmse

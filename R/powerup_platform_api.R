@@ -1898,12 +1898,14 @@ powerup_train_models <- function(
         modelKey = mk,
         perturbation = perturbation,
         training_samples = as.integer(train_samples_non_missing),
+        n_features_used = as.integer(fit$n_features_used %||% NA_integer_),
         mean_r = if (!is.null(fit$scores)) mean(fit$scores, na.rm = TRUE) else NA_real_,
         mean_r2 = if (!is.null(fit$scores_R2)) mean(fit$scores_R2, na.rm = TRUE) else NA_real_,
         mean_rmse = if (!is.null(fit$scores_rmse)) mean(fit$scores_rmse, na.rm = TRUE) else NA_real_,
         n_scores = if (!is.null(fit$scores)) length(fit$scores) else 0L,
         skipped = is.null(fit$model)
       )
+
       powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
       # ---- Make Predictions ----
@@ -2043,6 +2045,7 @@ powerup_train_models <- function(
         modelKey = mk,
         perturbation = perturbation,
         training_samples = as.integer(train_samples_non_missing),
+        n_features_used = NA_integer_,
         mean_r = NA_real_,
         mean_r2 = NA_real_,
         mean_rmse = NA_real_,
@@ -2056,6 +2059,7 @@ powerup_train_models <- function(
           rlang_last_trace = rlang_trace_txt
         )
       )
+
       powerup_write_json(file.path(model_out_dir, "metrics.json"), metrics)
 
       # Write empty artifacts matching the normal contract
@@ -2175,6 +2179,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
     mean_rmse <- NA_real_
     n_scores <- 0L
     training_samples <- NA_integer_
+    n_features_used <- NA_integer_
     skipped <- TRUE
     errorType <- NA_character_
     errorMessage <- NA_character_
@@ -2203,6 +2208,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         mean_rmse <- suppressWarnings(as.numeric(obj$mean_rmse %||% NA_real_))
         n_scores <- suppressWarnings(as.integer(obj$n_scores %||% 0L))
         training_samples <- suppressWarnings(as.integer(obj$training_samples %||% NA_integer_))
+        n_features_used <- suppressWarnings(as.integer(obj$n_features_used %||% NA_integer_))
         skipped <- isTRUE(obj$skipped %||% FALSE)
 
         if (!is.null(obj$error)) {
@@ -2237,6 +2243,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       mean_rmse = mean_rmse,
       n_scores = n_scores,
       training_samples = training_samples,
+      n_features_used = n_features_used,
       errorType = errorType,
       errorMessage = errorMessage,
       metricsPath = glue("{model_dir_gcs}/metrics.json"),
@@ -2245,6 +2252,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
       shapUserPath = glue("{model_dir_gcs}/shap_user.parquet"),
       shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
     )
+
   }
 
   base <- pert_tbl %>%
@@ -2274,6 +2282,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         mean_rmse = NA_real_,
         n_scores = 0L,
         training_samples = NA_integer_,
+        n_features_used = NA_integer_,
         errorType = "MissingMetrics",
         errorMessage = "metrics.json not found locally for this modelKey",
         metricsPath = glue("{model_dir_gcs}/metrics.json"),
@@ -2282,6 +2291,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         shapUserPath = glue("{model_dir_gcs}/shap_user.parquet"),
         shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
       )
+      
     } else {
       rows[[i]] <- parse_metrics(
         mf,
