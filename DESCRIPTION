@@ -1,6 +1,6 @@
 Package: powerup
 Title: POWERUP: Predictive Oncology Workflow for Expression-driven taRgets in Underpowered Patient cohorts
-Version: 0.1.1.0077
+Version: 0.1.1.0078
 Authors@R: 
     person(given = "Mushriq",
            family = "Al-Jazrawe",
@@ -13,6 +13,8 @@ Encoding: UTF-8
 LazyData: true
 Imports:
     arrow (>= 15.0.0),
+    DBI (>= 1.2.0),
+    duckdb (>= 0.10.0),
     dplyr (>= 1.1.0),
     magrittr (>= 2.0.0),
     tibble (>= 3.2.0),

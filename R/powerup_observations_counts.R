@@ -910,7 +910,8 @@ powerup_process_observations_from_counts <- function(
   counts_path,
   reference_path,
   schema_path,
-  predictions_path,
+  predictions_path = NULL,
+  predictions_duckdb_path = NULL,
   out_observations_dir,
   job_id,
   observation_run_id,
@@ -933,7 +934,32 @@ powerup_process_observations_from_counts <- function(
   .pu_assert_file_exists(counts_path, "counts_path")
   .pu_assert_file_exists(reference_path, "reference_path")
   .pu_assert_file_exists(schema_path, "schema_path")
-  .pu_assert_file_exists(predictions_path, "predictions_path")
+
+  if (!is.null(predictions_duckdb_path) && length(predictions_duckdb_path) >= 1) {
+    predictions_duckdb_path <- as.character(predictions_duckdb_path[[1]])
+    if (!is.na(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) {
+      .pu_assert_file_exists(predictions_duckdb_path, "predictions_duckdb_path")
+    } else {
+      predictions_duckdb_path <- NULL
+    }
+  } else {
+    predictions_duckdb_path <- NULL
+  }
+
+  if (!is.null(predictions_path) && length(predictions_path) >= 1) {
+    predictions_path <- as.character(predictions_path[[1]])
+    if (!is.na(predictions_path) && nzchar(trimws(predictions_path))) {
+      .pu_assert_file_exists(predictions_path, "predictions_path")
+    } else {
+      predictions_path <- NULL
+    }
+  } else {
+    predictions_path <- NULL
+  }
+
+  if (is.null(predictions_duckdb_path) && is.null(predictions_path)) {
+    stop("[powerup][OBSERVATIONS_COUNTS] either predictions_duckdb_path or predictions_path must be provided")
+  }
 
   if (!is.null(positive_controls_path) && length(positive_controls_path) >= 1) {
     positive_controls_path <- as.character(positive_controls_path[[1]])
@@ -1048,8 +1074,12 @@ powerup_process_observations_from_counts <- function(
   "reference_tbl columns after normalization={paste(colnames(reference_tbl), collapse=', ')}"
 ))
 
-  pred_tbl <- .pu_obs_load_predictions_required(predictions_path)
-
+  pred_tbl <- .pu_obs_load_predictions_required(
+    predictions_path = predictions_path,
+    predictions_duckdb_path = predictions_duckdb_path,
+    samples = analysis_samples
+  )
+  
   # Resolve user-supplied control lists exactly, then normalize to CRISPR perturbations later.
   pos_controls_raw <- .pu_obs_read_control_file(positive_controls_path)
   neg_controls_raw <- .pu_obs_read_control_file(negative_controls_path)
@@ -1370,6 +1400,7 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       negativeCount = length(neg_controls),
       includeUnexpressedCount = length(cfg$includeUnexpressed)
     ),
+    predictionsSource = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) "duckdb" else "csv",
     sampleOverlap = list(
       overlappingExact = head(overlapping_samples, 50),
       overlappingBase = head(overlapping_sample_bases, 50),
@@ -1451,6 +1482,7 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
     status = "SUCCEEDED",
     responseSet = response_set,
     dataVersion = data_version,
+    predictionsSource = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) "duckdb" else "csv",
     generatedAt = as.character(Sys.time()),
     inputs = list(
       countsPath = basename(counts_path),
@@ -1458,7 +1490,8 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       schemaPath = basename(schema_path),
       positiveControlsPath = if (!is.null(positive_controls_path) && nzchar(trimws(positive_controls_path))) basename(positive_controls_path) else NULL,
       negativeControlsPath = if (!is.null(negative_controls_path) && nzchar(trimws(negative_controls_path))) basename(negative_controls_path) else NULL,
-      predictionsPath = basename(predictions_path),
+      predictionsPath = if (!is.null(predictions_path) && nzchar(trimws(predictions_path))) basename(predictions_path) else NULL,
+      predictionsDuckdbPath = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) basename(predictions_duckdb_path) else NULL,
       configPath = if (!is.null(config_path) && nzchar(trimws(config_path))) basename(config_path) else NULL
     ),
     artifacts = list(

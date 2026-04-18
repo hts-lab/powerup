@@ -136,48 +136,56 @@ suppressPackageStartupMessages({
 }
 
 
-.pu_obs_load_predictions_required <- function(predictions_path) {
-  if (!requireNamespace("arrow", quietly = TRUE)) {
-    stop("[powerup][OBSERVATIONS] arrow R package is required to read parquet predictions.")
-  }
+.pu_obs_normalize_sample_ids <- function(samples) {
+  samples <- as.character(samples)
+  samples <- trimws(samples)
+  samples <- samples[!is.na(samples) & nzchar(samples)]
+  unique(samples)
+}
 
-  pred_tbl <- arrow::read_parquet(predictions_path) %>% tibble::as_tibble()
-
+.pu_obs_finalize_prediction_tbl <- function(pred_tbl, source_label = "predictions") {
   required_cols <- c("cell_line", "perturbation", "modelKey")
   missing_cols <- setdiff(required_cols, colnames(pred_tbl))
   if (length(missing_cols) > 0) {
     stop(glue(
-      "[powerup][OBSERVATIONS] predictions parquet missing required columns: ",
+      "[powerup][OBSERVATIONS] {source_label} missing required columns: ",
       "{paste(missing_cols, collapse=', ')}"
     ))
   }
 
-  # For cutoff-adjustable posterior work, observations should depend on the
-  # cutoff-free Gaussian prior ingredients, not on a precomputed single-cutoff
-  # prob_target_event. We therefore require pred_mean and at least one variance
-  # representation that can be used later by the frontend/API.
   if (!("pred_mean" %in% colnames(pred_tbl)) && !("pred" %in% colnames(pred_tbl))) {
     stop(
-      "[powerup][OBSERVATIONS] predictions parquet must contain pred_mean or pred"
+      glue(
+        "[powerup][OBSERVATIONS] {source_label} must contain pred_mean or pred"
+      )
     )
   }
 
   has_sd_like <- any(c("pred_sd", "pred_var", "pred_log_var") %in% colnames(pred_tbl))
   if (!has_sd_like) {
     stop(
-      "[powerup][OBSERVATIONS] predictions parquet must contain at least one of pred_sd, pred_var, or pred_log_var"
+      glue(
+        "[powerup][OBSERVATIONS] {source_label} must contain at least one of pred_sd, pred_var, or pred_log_var"
+      )
     )
   }
 
+  pred_tbl <- pred_tbl %>%
+    mutate(
+      cell_line = as.character(.data$cell_line),
+      perturbation = as.character(.data$perturbation),
+      modelKey = as.character(.data$modelKey)
+    )
 
-  # Finalize currently writes pred_mean, but be robust if an older artifact only has pred.
   if (!("pred_mean" %in% colnames(pred_tbl))) {
     if ("pred" %in% colnames(pred_tbl)) {
       pred_tbl <- pred_tbl %>%
         mutate(pred_mean = suppressWarnings(as.numeric(.data$pred)))
     } else {
       stop(
-        "[powerup][OBSERVATIONS] predictions parquet must contain pred_mean or pred"
+        glue(
+          "[powerup][OBSERVATIONS] {source_label} must contain pred_mean or pred"
+        )
       )
     }
   }
@@ -227,8 +235,7 @@ suppressPackageStartupMessages({
     pred_tbl <- pred_tbl %>% mutate(response_cutoff = NA_real_)
   }
 
-  # Final type normalization for downstream joins / JSON export
-  pred_tbl <- pred_tbl %>%
+  pred_tbl %>%
     mutate(
       pred_mean = suppressWarnings(as.numeric(.data$pred_mean)),
       pred_sd = suppressWarnings(as.numeric(.data$pred_sd)),
@@ -238,11 +245,115 @@ suppressPackageStartupMessages({
       pred_pi_upper_95 = suppressWarnings(as.numeric(.data$pred_pi_upper_95)),
       response_cutoff = suppressWarnings(as.numeric(.data$response_cutoff)),
       decreasing = as.logical(.data$decreasing)
-    )
-
-  pred_tbl
-
+    ) %>%
+    tibble::as_tibble()
 }
+
+.pu_obs_load_predictions_required <- function(
+  predictions_path = NULL,
+  predictions_duckdb_path = NULL,
+  samples = NULL
+) {
+  samples <- .pu_obs_normalize_sample_ids(samples)
+
+  duckdb_requested <- !is.null(predictions_duckdb_path) &&
+    !is.na(predictions_duckdb_path) &&
+    nzchar(trimws(predictions_duckdb_path))
+
+  if (duckdb_requested && !file.exists(predictions_duckdb_path)) {
+    stop(glue(
+      "[powerup][OBSERVATIONS] predictions_duckdb_path was provided but does not exist: {predictions_duckdb_path}"
+    ))
+  }
+
+  use_duckdb <- duckdb_requested && file.exists(predictions_duckdb_path)
+  
+
+  if (use_duckdb) {
+    if (!requireNamespace("DBI", quietly = TRUE)) {
+      stop("[powerup][OBSERVATIONS] DBI R package is required to read DuckDB predictions.")
+    }
+    if (!requireNamespace("duckdb", quietly = TRUE)) {
+      stop("[powerup][OBSERVATIONS] duckdb R package is required to read DuckDB predictions.")
+    }
+
+    con <- DBI::dbConnect(duckdb::duckdb(), dbdir = predictions_duckdb_path, read_only = TRUE)
+    on.exit({
+      try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE)
+    }, add = TRUE)
+
+    if (!DBI::dbExistsTable(con, "user_predictions_long")) {
+      stop(
+        "[powerup][OBSERVATIONS] DuckDB predictions artifact is missing table 'user_predictions_long'"
+      )
+    }
+
+    if (length(samples) > 0) {
+      DBI::dbWriteTable(
+        con,
+        "tmp_observation_samples",
+        data.frame(cell_line = samples, stringsAsFactors = FALSE),
+        temporary = TRUE,
+        overwrite = TRUE
+      )
+
+      pred_tbl <- DBI::dbGetQuery(
+        con,
+        "
+        SELECT p.*
+        FROM user_predictions_long AS p
+        INNER JOIN tmp_observation_samples AS s
+          ON p.cell_line = s.cell_line
+        "
+      ) %>%
+        tibble::as_tibble()
+
+      message(glue(
+        "[powerup][OBSERVATIONS] loaded predictions from DuckDB subset ",
+        "samples={length(samples)} rows={nrow(pred_tbl)} db={predictions_duckdb_path}"
+      ))
+    } else {
+      pred_tbl <- DBI::dbGetQuery(
+        con,
+        "SELECT * FROM user_predictions_long"
+      ) %>%
+        tibble::as_tibble()
+
+      message(glue(
+        "[powerup][OBSERVATIONS] loaded FULL predictions from DuckDB because no sample filter was supplied ",
+        "rows={nrow(pred_tbl)} db={predictions_duckdb_path}"
+      ))
+    }
+
+    return(.pu_obs_finalize_prediction_tbl(pred_tbl, source_label = "predictions DuckDB table"))
+  }
+
+  if (is.null(predictions_path) || is.na(predictions_path) || !nzchar(trimws(predictions_path))) {
+    stop("[powerup][OBSERVATIONS] either predictions_duckdb_path or predictions_path must be provided")
+  }
+
+  .pu_assert_file_exists(predictions_path, "predictions_path")
+
+  pred_tbl <- readr::read_csv(
+    predictions_path,
+    show_col_types = FALSE,
+    progress = FALSE
+  ) %>%
+    tibble::as_tibble()
+
+  if (length(samples) > 0 && "cell_line" %in% colnames(pred_tbl)) {
+    pred_tbl <- pred_tbl %>%
+      filter(.data$cell_line %in% samples)
+  }
+
+  message(glue(
+    "[powerup][OBSERVATIONS] loaded predictions from CSV ",
+    "samples={length(samples)} rows={nrow(pred_tbl)} path={predictions_path}"
+  ))
+
+  .pu_obs_finalize_prediction_tbl(pred_tbl, source_label = "predictions CSV")
+}
+
 
 .pu_obs_extract_target_level <- function(obs_long, response_set, perturbation_tags = "ko_") {
   if (!all(c(
@@ -1804,7 +1915,8 @@ powerup_process_observations <- function(
   schema_path,
   positive_controls_path = NULL,
   negative_controls_path = NULL,
-  predictions_path,
+  predictions_path = NULL,
+  predictions_duckdb_path = NULL,
   out_observations_dir,
   job_id,
   observation_run_id,
@@ -1817,7 +1929,14 @@ powerup_process_observations <- function(
 
   .pu_assert_file_exists(cleaned_observations_path, "cleaned_observations_path")
   .pu_assert_file_exists(schema_path, "schema_path")
-  .pu_assert_file_exists(predictions_path, "predictions_path")
+
+  if (!is.null(predictions_duckdb_path) && !is.na(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) {
+    .pu_assert_file_exists(predictions_duckdb_path, "predictions_duckdb_path")
+  } else if (!is.null(predictions_path) && !is.na(predictions_path) && nzchar(trimws(predictions_path))) {
+    .pu_assert_file_exists(predictions_path, "predictions_path")
+  } else {
+    stop("[powerup][OBSERVATIONS] either predictions_duckdb_path or predictions_path must be provided")
+  }
 
   if (!is.null(positive_controls_path) && !is.na(positive_controls_path) && nzchar(trimws(positive_controls_path))) {
     .pu_assert_file_exists(positive_controls_path, "positive_controls_path")
@@ -1838,12 +1957,20 @@ powerup_process_observations <- function(
   ) %>% tibble::as_tibble()
 
   schema_obj <- .pu_obs_read_json_file(schema_path)
-  pred_tbl <- .pu_obs_load_predictions_required(predictions_path)
 
   target_tbl <- .pu_obs_extract_target_level(
     obs_long,
     response_set = response_set,
     perturbation_tags = perturbation_tags
+  )
+
+  observation_samples <- unique(trimws(as.character(target_tbl$sample)))
+  observation_samples <- observation_samples[!is.na(observation_samples) & nzchar(observation_samples)]
+
+  pred_tbl <- .pu_obs_load_predictions_required(
+    predictions_path = predictions_path,
+    predictions_duckdb_path = predictions_duckdb_path,
+    samples = observation_samples
   )
 
   controls <- .pu_obs_resolve_controls(
@@ -2013,14 +2140,15 @@ overlapping_sample_bases <- intersect(observed_sample_bases, predicted_sample_ba
       nOverlappingPerturbations = length(overlapping_perts),
       nObservationTypes = length(unique(obs_long$observationType))
     ),
-sampleOverlap = list(
-  overlappingExact = head(overlapping_samples, 50),
-  overlappingBase = head(overlapping_sample_bases, 50),
-  observedOnlyExact = head(setdiff(observed_samples_clean, predicted_samples_clean), 50),
-  predictedOnlyExact = head(setdiff(predicted_samples_clean, observed_samples_clean), 50),
-  observedBasesOnly = head(setdiff(observed_sample_bases, predicted_sample_bases), 50),
-  predictedBasesOnly = head(setdiff(predicted_sample_bases, observed_sample_bases), 50)
-),
+    predictionsSource = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) "duckdb" else "csv",
+    sampleOverlap = list(
+      overlappingExact = head(overlapping_samples, 50),
+      overlappingBase = head(overlapping_sample_bases, 50),
+      observedOnlyExact = head(setdiff(observed_samples_clean, predicted_samples_clean), 50),
+      predictedOnlyExact = head(setdiff(predicted_samples_clean, observed_samples_clean), 50),
+      observedBasesOnly = head(setdiff(observed_sample_bases, predicted_sample_bases), 50),
+      predictedBasesOnly = head(setdiff(predicted_sample_bases, observed_sample_bases), 50)
+    ),
     perturbationOverlap = list(
       overlapping = head(overlapping_perts, 50),
       observedOnly = head(setdiff(observed_perts, predicted_perts), 50),
@@ -2103,13 +2231,15 @@ sampleOverlap = list(
     status = "SUCCEEDED",
     responseSet = response_set,
     dataVersion = data_version,
+    predictionsSource = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) "duckdb" else "csv",
     generatedAt = as.character(Sys.time()),
     inputs = list(
       cleanedObservationsPath = basename(cleaned_observations_path),
       schemaPath = basename(schema_path),
       positiveControlsPath = if (!is.null(positive_controls_path) && nzchar(trimws(positive_controls_path))) basename(positive_controls_path) else NULL,
       negativeControlsPath = if (!is.null(negative_controls_path) && nzchar(trimws(negative_controls_path))) basename(negative_controls_path) else NULL,
-      predictionsPath = basename(predictions_path)
+      predictionsPath = if (!is.null(predictions_path) && nzchar(trimws(predictions_path))) basename(predictions_path) else NULL,
+      predictionsDuckdbPath = if (!is.null(predictions_duckdb_path) && nzchar(trimws(predictions_duckdb_path))) basename(predictions_duckdb_path) else NULL
     ),
     artifacts = list(
       manifest = "manifest.json",
