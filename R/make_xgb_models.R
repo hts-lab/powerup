@@ -47,6 +47,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   min_variance <- 1e-8
   normal_z_95 <- 1.959963984540054
 
+  # Final full-data refit should use a fixed number of rounds chosen from CV,
+  # not early stopping against the full training data.
+  last_nrounds <- as.integer(nrounds)
+  eval_count <- max(1L, as.integer(nfolds) * as.integer(nrepeats))
+
   # This keeps one column of dependency scores (renamed 'y_value') plus all predictors
   prepare_model_data <- function(
     perturbation,
@@ -389,12 +394,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       obs_d = dplyr::if_else(obs >= discrete_cut, T, F)
     }
 
-    FP = sum(pred_d & !obs_d)
     TN = sum(!pred_d & !obs_d)
+    FN = sum(!pred_d & obs_d)
 
-    result = TN / (TN + FP)
+    result = TN / (TN + FN)
     return(result)
   }
+
 
   get_discrete_accuracy <- function(pred, obs, discrete_cut, decreasing = F){
 
@@ -485,6 +491,22 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       }
     )
 
+    cv_best_iterations <- purrr::map_int(
+      score_models,
+      function(m) {
+        bi <- m$best_iteration
+        if (is.null(bi) || is.na(bi) || bi < 1) {
+          return(as.integer(nrounds))
+        }
+        as.integer(bi)
+      }
+    )
+
+    last_nrounds <- max(
+      1L,
+      as.integer(round(stats::median(cv_best_iterations, na.rm = TRUE)))
+    )
+
     pred_best <- function(model, dmat) {
       bi <- model$best_iteration
       if (!is.null(bi) && !is.na(bi)) {
@@ -531,15 +553,15 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
   } else {
 
-    scores <- rep(1, 9)
-    scores_R2 <- rep(1, 9)
-    scores_rmse <- rep(0, 9)
-    scores_d_sensitivity <- rep(1, 9)
-    scores_d_specificity <- rep(1, 9)
-    scores_d_fpr <- rep(1, 9)
-    scores_d_ppv <- rep(1, 9)
-    scores_d_npv <- rep(1, 9)
-    scores_d_accuracy <- rep(1, 9)
+    scores <- rep(1, eval_count)
+    scores_R2 <- rep(1, eval_count)
+    scores_rmse <- rep(0, eval_count)
+    scores_d_sensitivity <- rep(1, eval_count)
+    scores_d_specificity <- rep(1, eval_count)
+    scores_d_fpr <- rep(0, eval_count)
+    scores_d_ppv <- rep(1, eval_count)
+    scores_d_npv <- rep(1, eval_count)
+    scores_d_accuracy <- rep(1, eval_count)
 
     # Fallback pseudo-OOF table if evaluation is skipped
     oof_predictions_df <- tibble::tibble(
@@ -550,7 +572,14 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     )
   }
 
-  cat(glue::glue(" r = {round(mean(scores),3)} +/- {round(1.96*sd(scores),3)} | R2 = {round(mean(scores_R2),3)} +/- {round(1.96*sd(scores_R2),3)} | RMSE = {round(mean(scores_rmse),5)} | (n={length(scores)})"))
+  cat(glue::glue(
+    " r = {round(mean(scores),3)} +/- {round(1.96*sd(scores)/sqrt(length(scores)),3)}",
+    " | R2 = {round(mean(scores_R2),3)} +/- {round(1.96*sd(scores_R2)/sqrt(length(scores_R2)),3)}",
+    " | RMSE = {round(mean(scores_rmse),5)}",
+    " | CV best_nrounds median = {last_nrounds}",
+    " | (n={length(scores)})"
+  ))
+
   flush.console()
 
   output <- list()
@@ -572,9 +601,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
   # If the score is good enough, proceed
   if (!is.na(mean(scores)) & mean(scores_R2) >= min_score){
-
     last_params <- model_params
-    last_nrounds <- nrounds
 
     last_weights <- model_data$original_data %>%
       dplyr::pull(y_value) %>%
@@ -585,8 +612,6 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     } else {
       last_matrix <- get_DMatrix(model_data$original_data, shuffle = shuffle)
     }
-
-    last_validation <- get_DMatrix(model_data$original_data)
 
     final_params <- last_params
     final_params$max_depth <- max_depth
@@ -600,15 +625,14 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       params = final_params,
       data = last_matrix,
       nrounds = last_nrounds,
-      evals = list(train = last_matrix, eval = last_validation),
-      early_stopping_rounds = 10,
       verbose = 0
     )
 
-    last_predictions <- predict(last_model, newdata = last_validation)
+    last_predictions <- predict(last_model, newdata = last_matrix)
     names(last_predictions) <- rownames(model_data$original_data)
 
-    null_prediction <- predict(last_model, newdata = last_matrix) %>% mean()
+    # We calculcate null prediction from SHAP bias terms  
+    # null_prediction <- predict(last_model, newdata = last_matrix) %>% mean()
 
     # In-sample residuals retained for debugging only
     errors <- (last_predictions - model_data$original_data$y_value)
@@ -665,11 +689,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       verbose = 0
     )
 
-    train_log_var_pred <- as.numeric(predict(error_model, newdata = last_validation))
+    train_log_var_pred <- as.numeric(predict(error_model, newdata = last_matrix))
     train_pred_var <- pmax(exp(train_log_var_pred), min_variance)
     train_pred_sd <- sqrt(train_pred_var)
 
-    cat(glue::glue(" E = +/- {round(1.96*mean(train_pred_sd, na.rm = TRUE), 3)}"), sep = "\n")
+    cat(glue::glue(" mean predicted 95% half-width = {round(1.96*mean(train_pred_sd, na.rm = TRUE), 3)}"), sep = "\n")
     flush.console()
 
     X_feat <- model_data$original_data %>%
@@ -677,6 +701,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       as.matrix()
 
     shap <- get_xgb_shap(last_model, X_feat, sample_names = rownames(model_data$original_data))
+
+    null_prediction <- unname(shap$bias[[1]])
 
     output$model <- last_model
     output$error_model <- error_model
