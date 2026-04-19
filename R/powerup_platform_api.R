@@ -81,6 +81,93 @@ powerup_write_lines <- function(path, lines) {
 # ---- internal helpers (package-private) ----
 
 
+.pu_collapse_shap_rowwise <- function(df, top_n, job_id = NA_character_) {
+  if (!("cell_line" %in% colnames(df))) {
+    stop(glue("[powerup][jobId={job_id}] SHAP df missing cell_line column"))
+  }
+
+  feature_cols <- setdiff(colnames(df), "cell_line")
+
+  if (length(feature_cols) < 1) {
+    return(df)
+  }
+
+  # Reserve names check
+  if (any(feature_cols %in% c("__other__", "__other_count__"))) {
+    stop(glue(
+      "[powerup][jobId={job_id}] SHAP feature names cannot include reserved names __other__ or __other_count__"
+    ))
+  }
+
+  has_intercept <- "(Intercept)" %in% feature_cols
+
+  out_rows <- vector("list", nrow(df))
+
+  for (i in seq_len(nrow(df))) {
+    row <- df[i, , drop = FALSE]
+
+    cl <- row$cell_line
+
+    # Extract features
+    feats <- row[, feature_cols, drop = FALSE]
+
+    # Separate intercept
+    intercept_val <- NULL
+    if (has_intercept) {
+      intercept_val <- feats[["(Intercept)"]]
+      feats[["(Intercept)"]] <- NULL
+    }
+
+    # Convert to numeric safely
+    vals <- suppressWarnings(as.numeric(feats[1, ]))
+    names(vals) <- colnames(feats)
+
+    vals[is.na(vals)] <- 0
+
+    if (length(vals) <= top_n) {
+      kept <- vals
+      other_sum <- 0
+      other_count <- 0
+    } else {
+      ord <- order(-abs(vals), names(vals))
+      keep_idx <- ord[seq_len(top_n)]
+
+      kept <- vals[keep_idx]
+
+      drop_idx <- setdiff(seq_along(vals), keep_idx)
+
+      other_sum <- sum(vals[drop_idx])
+      other_count <- length(drop_idx)
+    }
+
+    row_out <- c(
+      list(cell_line = cl),
+      if (has_intercept) list(`(Intercept)` = intercept_val) else NULL,
+      as.list(kept),
+      list(
+        "__other__" = other_sum,
+        "__other_count__" = as.integer(other_count)
+      )
+    )
+
+    out_rows[[i]] <- row_out
+  }
+
+  out_df <- dplyr::bind_rows(out_rows)
+
+  # Ensure consistent column order
+  base_cols <- c("cell_line")
+  if (has_intercept) base_cols <- c(base_cols, "(Intercept)")
+
+  feature_cols_new <- setdiff(colnames(out_df), c(base_cols, "__other__", "__other_count__"))
+  feature_cols_new <- sort(feature_cols_new)
+
+  out_df <- out_df[, c(base_cols, feature_cols_new, "__other__", "__other_count__"), drop = FALSE]
+
+  out_df
+}
+
+
 .pu_write_parquet_required <- function(df, path) {
   if (!requireNamespace("arrow", quietly = TRUE)) {
     stop(glue::glue("[powerup] arrow R package is required to write parquet: {path}"))
@@ -1675,7 +1762,11 @@ powerup_train_models <- function(
   powerup_dir_create(out_models_dir)
   set.seed(as.integer(seed))
 
-  
+  shap_top_n <- as.integer(Sys.getenv("POWERUP_SHAP_TOP_N", unset = "100"))
+  if (is.na(shap_top_n) || shap_top_n < 1) {
+    shap_top_n <- 100L
+  }
+
   # ---- Validate model_keys ----
   if (is.null(model_keys) || length(model_keys) == 0) {
     stop(glue("[powerup][jobId={job_id}] model_keys is empty"))
@@ -1982,6 +2073,12 @@ powerup_train_models <- function(
         })
 
         #readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
+        shap_user_df <- .pu_collapse_shap_rowwise(
+          shap_user_df,
+          top_n = shap_top_n,
+          job_id = job_id
+        )
+
         .pu_write_parquet_required(shap_user_df, file.path(model_out_dir, "shap_user.parquet"))
 
         rm(fit_user)
@@ -2005,6 +2102,12 @@ powerup_train_models <- function(
         })
 
         # readr::write_csv(shap_train_df, file.path(model_out_dir, "shap_train.csv"))
+        shap_train_df <- .pu_collapse_shap_rowwise(
+          shap_train_df,
+          top_n = shap_top_n,
+          job_id = job_id
+        )
+
         .pu_write_parquet_required(shap_train_df, file.path(model_out_dir, "shap_train.parquet"))
 
         rm(shap_train_df)
@@ -2291,7 +2394,7 @@ powerup_finalize <- function(out_preprocess_dir, models_dir, out_aggregates_dir,
         shapUserPath = glue("{model_dir_gcs}/shap_user.parquet"),
         shapTrainPath = glue("{model_dir_gcs}/shap_train.parquet")
       )
-      
+
     } else {
       rows[[i]] <- parse_metrics(
         mf,
