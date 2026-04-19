@@ -42,6 +42,11 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   cat(glue::glue("[{lubridate::now('America/New_York')}] Training a model for {perturbation} ({indx} of {total}) .."))
   flush.console()
 
+  shap_top_n <- as.integer(Sys.getenv("POWERUP_SHAP_TOP_N", unset = "100"))
+  if (is.na(shap_top_n) || shap_top_n < 1) {
+    shap_top_n <- 100L
+  }
+
   # Small epsilon for variance modeling
   variance_epsilon <- 1e-8
   min_variance <- 1e-8
@@ -296,6 +301,83 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
       good_terms = pos_terms
     ))
   }
+
+  .pu_collapse_shap_rowwise_matrix <- function(shap_df, top_n) {
+
+    # Convert rownames → cell_line
+    shap_df <- shap_df %>%
+      tibble::rownames_to_column("cell_line")
+
+    feature_cols <- setdiff(colnames(shap_df), "cell_line")
+
+    if (any(feature_cols %in% c("__other__", "__other_count__"))) {
+      stop("Reserved SHAP names detected in upstream features")
+    }
+
+    has_intercept <- "(Intercept)" %in% feature_cols
+
+    out_rows <- vector("list", nrow(shap_df))
+
+    for (i in seq_len(nrow(shap_df))) {
+
+      row <- shap_df[i, , drop = FALSE]
+      cl <- row$cell_line
+
+      feats <- row[, feature_cols, drop = FALSE]
+
+      intercept_val <- NULL
+      if (has_intercept) {
+        intercept_val <- feats[["(Intercept)"]]
+        feats[["(Intercept)"]] <- NULL
+      }
+
+      vals <- suppressWarnings(as.numeric(feats[1, ]))
+      names(vals) <- colnames(feats)
+
+      vals[is.na(vals)] <- 0
+
+      if (length(vals) <= top_n) {
+        kept <- vals
+        other_sum <- 0
+        other_count <- 0
+      } else {
+        ord <- order(-abs(vals), names(vals))
+        keep_idx <- ord[seq_len(top_n)]
+
+        kept <- vals[keep_idx]
+
+        drop_idx <- setdiff(seq_along(vals), keep_idx)
+
+        other_sum <- sum(vals[drop_idx])
+        other_count <- length(drop_idx)
+      }
+
+      row_out <- c(
+        list(cell_line = cl),
+        if (has_intercept) list(`(Intercept)` = intercept_val) else NULL,
+        as.list(kept),
+        list(
+          "__other__" = other_sum,
+          "__other_count__" = as.integer(other_count)
+        )
+      )
+
+      out_rows[[i]] <- row_out
+    }
+
+    out_df <- dplyr::bind_rows(out_rows)
+
+    base_cols <- c("cell_line")
+    if (has_intercept) base_cols <- c(base_cols, "(Intercept)")
+
+    feature_cols_new <- setdiff(colnames(out_df), c(base_cols, "__other__", "__other_count__"))
+    feature_cols_new <- sort(feature_cols_new)
+
+    out_df <- out_df[, c(base_cols, feature_cols_new, "__other__", "__other_count__"), drop = FALSE]
+
+    return(out_df)
+  }
+
 
   # If the SD is zero, cor() will throw an error
   get_pseudo_cor <- function(x, y){
@@ -722,8 +804,15 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
     output$feature_contribution <- shap$shap_table
     output$important_features <- shap$good_terms
-    output$shap_values <- shap$shap_values
+
+    collapsed_shap <- .pu_collapse_shap_rowwise_matrix(
+      shap$shap_values,
+      top_n = shap_top_n
+    )
+
+    output$shap_values <- collapsed_shap
     output$shap_bias <- shap$bias
+
     output$sample_names <- rownames(model_data$original_data)
     output$feature_names <- colnames(X_feat)
 
