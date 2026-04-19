@@ -2088,7 +2088,8 @@ powerup_train_models <- function(
         rm(shap_user_df)
         gc()
 
-        # 4) TRAINING SHAP extraction (same contract as SHAP_USER)
+        # 4) TRAINING SHAP extraction
+        # fit$shap_values is already collapsed upstream in make_xgb_model()
         stage <- "SHAP_TRAIN: extract fit$shap_values"
         shap_train_df <- tryCatch({
           df <- as.data.frame(fit$shap_values)
@@ -2109,7 +2110,7 @@ powerup_train_models <- function(
         })
 
         .pu_write_parquet_required(shap_train_df, file.path(model_out_dir, "shap_train.parquet"))
-        
+
         rm(shap_train_df)
         gc()
 
