@@ -2059,9 +2059,13 @@ powerup_train_models <- function(
         # 3) SHAP extraction
         stage <- "SHAP_USER: extract fit_user$new_data$shap_values"
         shap_user_df <- tryCatch({
-          fit_user$new_data$shap_values %>%
-            as.data.frame() %>%
-            tibble::rownames_to_column("cell_line")
+          df <- as.data.frame(fit_user$new_data$shap_values)
+
+          if (!("cell_line" %in% colnames(df))) {
+            df <- tibble::rownames_to_column(df, "cell_line")
+          }
+
+          df
         }, error = function(e) {
           tr <- .pu_capture_traces()
           msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
@@ -2072,7 +2076,6 @@ powerup_train_models <- function(
           stop(e)
         })
 
-        #readr::write_csv(shap_user_df, file.path(model_out_dir, "shap_user.csv"))
         shap_user_df <- .pu_collapse_shap_rowwise(
           shap_user_df,
           top_n = shap_top_n,
@@ -2088,9 +2091,13 @@ powerup_train_models <- function(
         # 4) TRAINING SHAP extraction (same contract as SHAP_USER)
         stage <- "SHAP_TRAIN: extract fit$shap_values"
         shap_train_df <- tryCatch({
-          fit$shap_values %>%
-            as.data.frame() %>%
-            tibble::rownames_to_column("cell_line")
+          df <- as.data.frame(fit$shap_values)
+
+          if (!("cell_line" %in% colnames(df))) {
+            df <- tibble::rownames_to_column(df, "cell_line")
+          }
+
+          df
         }, error = function(e) {
           tr <- .pu_capture_traces()
           msg <- glue("[powerup][jobId={job_id}] {stage} FAILED modelKey={mk} perturbation={perturbation}: {conditionMessage(e)}")
@@ -2101,15 +2108,8 @@ powerup_train_models <- function(
           stop(e)
         })
 
-        # readr::write_csv(shap_train_df, file.path(model_out_dir, "shap_train.csv"))
-        shap_train_df <- .pu_collapse_shap_rowwise(
-          shap_train_df,
-          top_n = shap_top_n,
-          job_id = job_id
-        )
-
         .pu_write_parquet_required(shap_train_df, file.path(model_out_dir, "shap_train.parquet"))
-
+        
         rm(shap_train_df)
         gc()
 
