@@ -188,6 +188,40 @@ powerup_write_lines <- function(path, lines) {
 }
 
 
+.pu_assert_unique_colnames <- function(df, label, job_id = NA_character_) {
+  cols <- colnames(df)
+
+  if (is.null(cols) || length(cols) < 1) {
+    stop(glue(
+      "[powerup][jobId={job_id}] {label} has no column names"
+    ))
+  }
+
+  dup_cols <- unique(cols[duplicated(cols)])
+
+  if (length(dup_cols) < 1) {
+    return(invisible(TRUE))
+  }
+
+  dup_examples <- vapply(
+    dup_cols,
+    function(nm) {
+      idx <- which(cols == nm)
+      paste0(nm, " [positions: ", paste(idx, collapse = ","), "]")
+    },
+    character(1)
+  )
+
+  stop(glue(
+    "[powerup][jobId={job_id}] {label} contains duplicate column names. ",
+    "Column names must be unique before preprocessing. ",
+    "Examples: ",
+    "{paste(head(dup_examples, 25), collapse='; ')}",
+    ifelse(length(dup_examples) > 25, " ...", "")
+  ))
+}
+
+
 .pu_read_csv_robust <- function(path, label, job_id = NA_character_) {
   .pu_assert_file_exists(path, label)
 
@@ -209,8 +243,11 @@ powerup_write_lines <- function(path, lines) {
     }
   )
 
+  .pu_assert_unique_colnames(out, label = label, job_id = job_id)
+
   tibble::as_tibble(out)
 }
+
 
 .pu_assert_file_exists <- function(path, label) {
   if (!is.character(path) || length(path) != 1 || nchar(path) < 1) {
