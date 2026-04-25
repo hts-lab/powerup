@@ -136,7 +136,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
 
     prepared_data <- prepared_data %>%
       tibble::column_to_rownames("cell_line") %>%
-      dplyr::mutate(response = y_value > response_cutoff)
+      dplyr::mutate(response = y_value >= response_cutoff)
 
     data_folds <- rsample::vfold_cv(
       prepared_data,
@@ -195,7 +195,7 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     status_major_count <- dplyr::if_else(status_counts["A"] > status_counts["B"], status_counts["A"], status_counts["B"])
     status_weight <- 1 / status_counts
 
-    weights <- dplyr::if_else(y_value > response_cutoff, status_weight["A"], status_weight["B"])
+    weights <- dplyr::if_else(y_value >= response_cutoff, status_weight["A"], status_weight["B"])
     weights <- weights / sum(weights)
     weights <- dplyr::if_else(weights > weight_cap, weight_cap, weights)
 
