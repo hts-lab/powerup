@@ -218,6 +218,10 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
   cols <- c("(Intercept)", setdiff(cols, "(Intercept)"))
   shap_values_df <- shap_values_df[, cols, drop = FALSE]
 
+
+  if (is.null(model$new_data) || !is.list(model$new_data)) {
+    model$new_data <- list()
+  }
   model$new_data$shap_values <- shap_values_df
 
   # Attach new data outputs
@@ -264,9 +268,20 @@ make_new_data_predictions <- function(model, name, indx, total, new_data){
 add_predictions <- function(models, new_data, models_to_use = NULL){
 
   # Subset to only needed models if provided
-  if(!is.null(models_to_use) && length(models_to_use) > 0) {
+  if (!is.null(models_to_use) && length(models_to_use) > 0) {
+    models_to_use <- as.character(models_to_use)
+    models_to_use <- models_to_use[nzchar(models_to_use)]
+
+    missing_models <- setdiff(models_to_use, names(models))
+    if (length(missing_models) > 0) {
+      stop(glue::glue(
+        "models_to_use contains {length(missing_models)} model(s) not present in models, e.g. {missing_models[[1]]}"
+      ))
+    }
+
     models <- models[models_to_use]
   }
+
 
   inputs <- list(
     model = models,
