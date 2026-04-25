@@ -453,9 +453,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TP = sum(pred_d & obs_d)
     FN = sum(!pred_d & obs_d)
 
-    result = TP / (TP + FN)
+    denom <- TP + FN
+    if (denom == 0) return(NA_real_)
+
+    result = TP / denom
     return(result)
   }
+
 
   get_discrete_specificity <- function(pred, obs, discrete_cut, decreasing = F){
 
@@ -470,9 +474,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TN = sum(!pred_d & !obs_d)
     FP = sum(pred_d & !obs_d)
 
-    result = TN / (TN + FP)
+    denom <- TN + FP
+    if (denom == 0) return(NA_real_)
+
+    result = TN / denom
     return(result)
   }
+
 
   get_discrete_fpr <- function(pred, obs, discrete_cut, decreasing = F){
 
@@ -487,9 +495,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     FP = sum(pred_d & !obs_d)
     TN = sum(!pred_d & !obs_d)
 
-    result = FP / (FP + TN)
+    denom <- FP + TN
+    if (denom == 0) return(NA_real_)
+
+    result = FP / denom
     return(result)
   }
+
 
   get_discrete_ppv <- function(pred, obs, discrete_cut, decreasing = F){
 
@@ -504,9 +516,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TP = sum(pred_d & obs_d)
     FP = sum(pred_d & !obs_d)
 
-    result = TP / (TP + FP)
+    denom <- TP + FP
+    if (denom == 0) return(NA_real_)
+
+    result = TP / denom
     return(result)
   }
+
 
   get_discrete_npv <- function(pred, obs, discrete_cut, decreasing = F){
 
@@ -521,7 +537,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TN = sum(!pred_d & !obs_d)
     FN = sum(!pred_d & obs_d)
 
-    result = TN / (TN + FN)
+    denom <- TN + FN
+    if (denom == 0) return(NA_real_)
+
+    result = TN / denom
     return(result)
   }
 
@@ -541,9 +560,13 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
     TN = sum(!pred_d & !obs_d)
     FN = sum(!pred_d & obs_d)
 
-    result = (TP + TN) / (TP + FP + TN + FN)
+    denom <- TP + FP + TN + FN
+    if (denom == 0) return(NA_real_)
+
+    result = (TP + TN) / denom
     return(result)
   }
+  
 
   # Step 1: Prepare the data
   model_data <- prepare_model_data(
