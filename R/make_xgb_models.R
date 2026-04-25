@@ -305,9 +305,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   .pu_collapse_shap_rowwise_matrix <- function(shap_df, top_n) {
 
     # Convert rownames → cell_line
-    shap_df <- shap_df %>%
-      tibble::rownames_to_column("cell_line")
-
+    if (!("cell_line" %in% colnames(shap_df))) {
+      shap_df <- shap_df %>% tibble::rownames_to_column("cell_line")
+    }
+    
     feature_cols <- setdiff(colnames(shap_df), "cell_line")
 
     if (any(feature_cols %in% c("__other__", "__other_count__"))) {
@@ -379,23 +380,64 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
 
 
-  # If the SD is zero, cor() will throw an error
+
+  # If SD is zero/NA, correlation is not well-defined
   get_pseudo_cor <- function(x, y){
 
-    if (sd(x) == 0 | sd(y) == 0){
-      x[1] = x[1] + 1e-6
-      y[1] = y[1] + 1e-6
+    x <- as.numeric(x)
+    y <- as.numeric(y)
+
+    ok <- is.finite(x) & is.finite(y)
+    x <- x[ok]
+    y <- y[ok]
+
+    if (length(x) < 2 || length(y) < 2) {
+      return(NA_real_)
     }
 
-    return(cor(x, y))
+    sx <- stats::sd(x)
+    sy <- stats::sd(y)
+
+    if (is.na(sx) || is.na(sy) || sx == 0 || sy == 0) {
+      return(NA_real_)
+    }
+
+    return(stats::cor(x, y))
   }
 
   get_rmse <- function(x, y){
-    return(sqrt(mean((x - y)^2)))
+
+    x <- as.numeric(x)
+    y <- as.numeric(y)
+
+    ok <- is.finite(x) & is.finite(y)
+    if (!any(ok)) {
+      return(NA_real_)
+    }
+
+    return(sqrt(mean((x[ok] - y[ok])^2)))
   }
 
   get_R2 <- function(x, y){
-    return(1 - sum((x - y)^2) / sum((y - mean(y))^2))
+
+    x <- as.numeric(x)
+    y <- as.numeric(y)
+
+    ok <- is.finite(x) & is.finite(y)
+    x <- x[ok]
+    y <- y[ok]
+
+    if (length(x) < 2 || length(y) < 2) {
+      return(NA_real_)
+    }
+
+    denom <- sum((y - mean(y))^2)
+
+    if (is.na(denom) || denom <= 0) {
+      return(NA_real_)
+    }
+
+    return(1 - sum((x - y)^2) / denom)
   }
 
   get_discrete_sensitivity <- function(pred, obs, discrete_cut, decreasing = F){
@@ -657,9 +699,9 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
 
   cat(glue::glue(
-    " r = {round(mean(scores),3)} +/- {round(1.96*sd(scores)/sqrt(length(scores)),3)}",
-    " | R2 = {round(mean(scores_R2),3)} +/- {round(1.96*sd(scores_R2)/sqrt(length(scores_R2)),3)}",
-    " | RMSE = {round(mean(scores_rmse),5)}",
+    " r = {round(mean(scores, na.rm = TRUE),3)} +/- {round(1.96*stats::sd(scores, na.rm = TRUE)/sqrt(sum(is.finite(scores))),3)}",
+    " | R2 = {round(mean(scores_R2, na.rm = TRUE),3)} +/- {round(1.96*stats::sd(scores_R2, na.rm = TRUE)/sqrt(sum(is.finite(scores_R2))),3)}",
+    " | RMSE = {round(mean(scores_rmse, na.rm = TRUE),5)}",
     " | CV best_nrounds median = {last_nrounds}",
     " | (n={length(scores)})"
   ))
@@ -685,7 +727,10 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   output$distribution_family <- "gaussian_oof_log_variance"
 
   # If the score is good enough, proceed
-  if (!is.na(mean(scores)) & mean(scores_R2) >= min_score){
+  mean_score <- mean(scores, na.rm = TRUE)
+  mean_r2 <- mean(scores_R2, na.rm = TRUE)
+
+  if (is.finite(mean_score) && is.finite(mean_r2) && mean_r2 >= min_score){
     last_params <- model_params
 
     last_weights <- model_data$original_data %>%
