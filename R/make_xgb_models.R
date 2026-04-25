@@ -722,8 +722,8 @@ make_xgb_model <- function(perturbation, indx, total, dataset,
   }
 
   cat(glue::glue(
-    " r = {round(mean(scores, na.rm = TRUE),3)} +/- {round(1.96*stats::sd(scores, na.rm = TRUE)/sqrt(sum(is.finite(scores))),3)}",
-    " | R2 = {round(mean(scores_R2, na.rm = TRUE),3)} +/- {round(1.96*stats::sd(scores_R2, na.rm = TRUE)/sqrt(sum(is.finite(scores_R2))),3)}",
+    " r = {round(mean(scores, na.rm = TRUE),3)} +/- {round(ifelse(sum(is.finite(scores)) > 1, 1.96*stats::sd(scores, na.rm = TRUE)/sqrt(sum(is.finite(scores))), NA_real_),3)}",
+    " | R2 = {round(mean(scores_R2, na.rm = TRUE),3)} +/- {round(ifelse(sum(is.finite(scores_R2)) > 1, 1.96*stats::sd(scores_R2, na.rm = TRUE)/sqrt(sum(is.finite(scores_R2))), NA_real_),3)}",
     " | RMSE = {round(mean(scores_rmse, na.rm = TRUE),5)}",
     " | CV best_nrounds median = {last_nrounds}",
     " | (n={length(scores)})"
@@ -1159,7 +1159,11 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
   big_chunk_count = 0
   for (this_big_chunk in big_chunks){
     big_chunk_count = big_chunk_count + 1
-    system(glue::glue("mkdir -p {path}/results/big_chunk_{big_chunk_count}"))
+    dir.create(
+      file.path(path, "results", glue::glue("big_chunk_{big_chunk_count}")),
+      recursive = TRUE,
+      showWarnings = FALSE
+    )
   }
   
   # Release memory
@@ -1212,8 +1216,8 @@ fit_models <- function(perturbs, model_dataset, splits = 10,
   
   saveRDS(all_chunks,glue::glue("{path}/results/models.rds"))
   
-  show_msg(glue("[{lubridate::now('America/New_York')}] Done. The overall average model accuracy (r) was {all_chunks %>% purrr::map('scores') %>% purrr::map(mean) %>% unlist() %>% mean()}"))
-  
+  show_msg(glue("[{lubridate::now('America/New_York')}] Done. The overall average model accuracy (r) was {all_chunks %>% purrr::map('scores') %>% purrr::map(~mean(.x, na.rm = TRUE)) %>% unlist() %>% mean(na.rm = TRUE)}"))
+
   return("Done")
   
 }
